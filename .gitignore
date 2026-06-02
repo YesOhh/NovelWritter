@@ -1,0 +1,19 @@
+node_modules/
+dist/
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+.DS_Store
+*.db
+
+# 构建缓存
+.vite/
+*.tsbuildinfo
+
+# 运行/调试日志（含本机路径、请求详情，勿入库）
+*.log
+
+# 本机 Claude Code / 代理工具配置（含本地代理地址与令牌）
+.claude/

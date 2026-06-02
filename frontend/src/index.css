@@ -1,0 +1,559 @@
+:root {
+  font-family: system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
+  color: #1f2933;
+  background: #f5f7fa;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+.app {
+  max-width: 1360px;
+  margin: 0 auto;
+  padding: 16px 16px 24px;
+}
+
+h1 {
+  font-size: 22px;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+@media (max-width: 768px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.panel {
+  background: #fff;
+  border: 1px solid #e3e8ee;
+  border-radius: 10px;
+  padding: 16px;
+}
+
+label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  margin: 12px 0 4px;
+  color: #52606d;
+}
+
+textarea,
+input[type="text"],
+input[type="number"],
+input:not([type]),
+select {
+  width: 100%;
+  border: 1px solid #cbd2d9;
+  border-radius: 6px;
+  padding: 8px;
+  font-size: 14px;
+  font-family: inherit;
+}
+
+textarea {
+  resize: vertical;
+}
+
+button {
+  margin-top: 16px;
+  background: #3949ab;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 10px 18px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+button:disabled {
+  background: #9aa5b1;
+  cursor: not-allowed;
+}
+
+.output {
+  white-space: pre-wrap;
+  line-height: 1.8;
+  font-size: 15px;
+  min-height: 300px;
+}
+
+.status {
+  font-size: 13px;
+  color: #627d98;
+  margin-bottom: 8px;
+}
+
+.error {
+  color: #c0392b;
+}
+
+.tabs {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0 16px;
+}
+
+.tabs button {
+  margin-top: 0;
+  background: #fff;
+  color: #52606d;
+  border: 1px solid #cbd2d9;
+}
+
+.tabs button.active {
+  background: #3949ab;
+  color: #fff;
+  border-color: #3949ab;
+}
+
+.hint {
+  font-size: 13px;
+  color: #829ab1;
+  margin: 8px 0;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+.project-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
+}
+
+.project-list li {
+  margin: 4px 0;
+  display: flex;
+  gap: 6px;
+}
+
+.project-list button {
+  margin-top: 0;
+  flex: 1;
+  text-align: left;
+  background: #f0f4f8;
+  color: #1f2933;
+  border: 1px solid #e3e8ee;
+}
+
+.project-list button.del {
+  flex: 0 0 auto;
+  background: #fff;
+  color: #c0392b;
+  border-color: #f0c9c4;
+}
+
+.project-list button.del:hover {
+  background: #fde8e6;
+}
+
+.project-list button.active {
+  background: #e0e7ff;
+  border-color: #3949ab;
+}
+
+.project-list .genre {
+  font-size: 12px;
+  color: #829ab1;
+  margin-left: 6px;
+}
+
+.card {
+  border: 1px solid #e3e8ee;
+  border-radius: 8px;
+  padding: 12px;
+  margin: 8px 0;
+  background: #fafbfc;
+}
+
+.card .meta {
+  font-size: 13px;
+  color: #52606d;
+  margin-top: 4px;
+  line-height: 1.6;
+}
+
+.chapter-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.chapter-row button.gen {
+  margin-top: 0;
+  flex: 0 0 auto;
+  padding: 4px 12px;
+  font-size: 12px;
+}
+
+.badge {
+  display: inline-block;
+  margin: 0 6px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  background: #e3e8ee;
+  color: #627d98;
+}
+
+.badge.drafted {
+  background: #d3f9e0;
+  color: #1f7a4d;
+}
+
+.chapter-actions {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.badge.review.sev-none {
+  background: #d3f9e0;
+  color: #1f7a4d;
+}
+.badge.review.sev-low {
+  background: #e3e8ee;
+  color: #627d98;
+}
+.badge.review.sev-medium {
+  background: #fff1cc;
+  color: #9a6700;
+}
+.badge.review.sev-high {
+  background: #ffe0e0;
+  color: #b42318;
+}
+
+.review-report {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: #f7f9fb;
+  border-radius: 6px;
+}
+
+.issue-list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.issue {
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+
+.issue .issue-tag {
+  font-weight: 600;
+}
+.issue.sev-high .issue-tag {
+  color: #b42318;
+}
+.issue.sev-medium .issue-tag {
+  color: #9a6700;
+}
+.issue.sev-low .issue-tag {
+  color: #627d98;
+}
+
+.issue-fix {
+  color: #486581;
+  margin-top: 2px;
+}
+
+.output.stream {
+  min-height: auto;
+  margin-top: 8px;
+  padding: 8px;
+  background: #f7f9fb;
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.card .meta.summary {
+  background: #fff8e6;
+  border-left: 3px solid #f0c14b;
+  padding: 6px 10px;
+  margin-top: 8px;
+  border-radius: 4px;
+}
+
+details {
+  margin-top: 6px;
+}
+
+details summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: #3949ab;
+}
+
+/* ===== 三栏工作台布局（项目管理页） ===== */
+.workspace {
+  display: grid;
+  grid-template-columns: 240px 280px 1fr;
+  gap: 12px;
+  height: calc(100vh - 130px);
+}
+
+.workspace .rail,
+.workspace .chapter-nav,
+.workspace .main-pane {
+  background: #fff;
+  border: 1px solid #e3e8ee;
+  border-radius: 10px;
+  padding: 12px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+@media (max-width: 1024px) {
+  .workspace {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+  .workspace .rail,
+  .workspace .chapter-nav,
+  .workspace .main-pane {
+    overflow-y: visible;
+  }
+}
+
+/* 左栏：项目列表 */
+.rail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 700;
+  font-size: 15px;
+  color: #1f2933;
+}
+
+.rail-head .mini {
+  margin-top: 0;
+  padding: 4px 10px;
+  font-size: 12px;
+  background: #eef1f8;
+  color: #3949ab;
+  border: 1px solid #d6dcef;
+}
+
+.create-form {
+  border: 1px solid #e3e8ee;
+  border-radius: 8px;
+  padding: 10px;
+  margin: 10px 0;
+  background: #fafbfc;
+}
+
+.create-form label {
+  margin-top: 8px;
+}
+
+.create-form button {
+  margin-top: 12px;
+  width: 100%;
+  padding: 8px;
+  font-size: 13px;
+}
+
+.project-list button.del {
+  padding: 6px 10px;
+  font-size: 16px;
+  line-height: 1;
+}
+
+/* 中栏：章节导航 */
+.nav-head h2 {
+  font-size: 16px;
+  margin: 0 0 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nav-head .actions button {
+  margin-top: 0;
+  flex: 1;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.nav-chars {
+  margin: 12px 0;
+}
+
+.nav-chars summary {
+  font-weight: 600;
+  color: #52606d;
+}
+
+.nav-chars .card {
+  padding: 8px;
+}
+
+.nav-vol {
+  margin-top: 14px;
+}
+
+.nav-vol-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #334e68;
+  padding: 4px 0;
+  border-bottom: 1px solid #eef1f5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nav-chapters {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+}
+
+.nav-chapters li {
+  margin: 2px 0;
+}
+
+.nav-chapter {
+  margin-top: 0;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  text-align: left;
+  background: transparent;
+  color: #334e68;
+  border: 1px solid transparent;
+  padding: 7px 9px;
+  font-size: 13px;
+  border-radius: 6px;
+}
+
+.nav-chapter:hover {
+  background: #f0f4f8;
+}
+
+.nav-chapter.active {
+  background: #e0e7ff;
+  border-color: #c3cdf5;
+  color: #1f2933;
+  font-weight: 600;
+}
+
+.nav-ch-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nav-ch-badges {
+  flex: 0 0 auto;
+}
+
+.dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #cbd2d9;
+}
+
+.dot.todo {
+  background: #cbd2d9;
+}
+
+.dot.writing {
+  background: #3949ab;
+  animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.dot.done {
+  background: #2bb673;
+}
+.dot.done.sev-medium {
+  background: #f0a020;
+}
+.dot.done.sev-high {
+  background: #e0524d;
+}
+
+/* 右栏：正文主区 */
+.main-pane .hint.center {
+  text-align: center;
+  margin-top: 40px;
+}
+
+.chapter-detail {
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+.chapter-head {
+  border-bottom: 1px solid #eef1f5;
+  padding-bottom: 12px;
+  margin-bottom: 16px;
+}
+
+.chapter-head .crumbs {
+  font-size: 12px;
+  color: #829ab1;
+}
+
+.chapter-head h2 {
+  margin: 4px 0 8px;
+  font-size: 20px;
+}
+
+.chapter-head .badges {
+  margin-bottom: 8px;
+}
+
+.chapter-outline {
+  font-size: 13px;
+  color: #52606d;
+  line-height: 1.6;
+  background: #f7f9fb;
+  padding: 8px 10px;
+  border-radius: 6px;
+  margin-bottom: 12px;
+}
+
+.main-pane .output {
+  white-space: pre-wrap;
+  line-height: 1.9;
+  font-size: 15.5px;
+  min-height: auto;
+  margin-top: 16px;
+}
+
+.main-pane .badge {
+  margin: 0 6px 0 0;
+}
+
+details summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: #3949ab;
+}

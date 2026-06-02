@@ -1,0 +1,36 @@
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.api.generate import router as generate_router
+from app.api.projects import router as projects_router
+from app.api.settings import router as settings_router
+from app.config import settings
+from app.db import init_db
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_db()
+    yield
+
+
+app = FastAPI(title="AI Agent 小说写作系统", version="0.2.0", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origin_list,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(generate_router)
+app.include_router(projects_router)
+app.include_router(settings_router)
+
+
+@app.get("/health")
+async def health() -> dict:
+    return {"status": "ok"}
