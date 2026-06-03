@@ -4,6 +4,7 @@ from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy import text
 
 # DB 文件落在 backend/novel.db，绝对路径定位，避免受启动工作目录影响。
 _DB_PATH = Path(__file__).resolve().parent.parent / "novel.db"
@@ -28,3 +29,10 @@ async def init_db() -> None:
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        columns = await conn.execute(text("PRAGMA table_info(volumes)"))
+        column_names = {row[1] for row in columns.fetchall()}
+        if "kind" not in column_names:
+            await conn.execute(text("ALTER TABLE volumes ADD COLUMN kind VARCHAR(40) DEFAULT 'novel' NOT NULL"))
+        await conn.execute(
+            text("UPDATE volumes SET kind = 'reference' WHERE outline LIKE '由参考文本分章导入%'")
+        )

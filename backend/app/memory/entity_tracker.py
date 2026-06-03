@@ -74,14 +74,19 @@ async def extract_and_store(
 
 
 async def current_states(
-    session: AsyncSession, character_ids: list[str]
+    session: AsyncSession,
+    character_ids: list[str],
+    chapter_ids: set[str] | None = None,
 ) -> dict[str, dict]:
     """取每个角色最新一条状态（按插入顺序，最后写入的为最新）。"""
     if not character_ids:
         return {}
-    result = await session.execute(
-        select(EntityState).where(EntityState.character_id.in_(character_ids))
-    )
+    query = select(EntityState).where(EntityState.character_id.in_(character_ids))
+    if chapter_ids is not None:
+        if not chapter_ids:
+            return {}
+        query = query.where(EntityState.chapter_id.in_(chapter_ids))
+    result = await session.execute(query)
     latest: dict[str, dict] = {}
     for es in result.scalars().all():
         latest[es.character_id] = es.state  # 后写入覆盖前者 → 最新

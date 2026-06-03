@@ -37,6 +37,16 @@ class Project(Base):
     settings: Mapped[list["WorldSetting"]] = relationship(
         back_populates="project", cascade="all, delete-orphan"
     )
+    foreshadows: Mapped[list["Foreshadow"]] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+        order_by="Foreshadow.created_at",
+    )
+    truth_files: Mapped[list["TruthFile"]] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+        order_by="TruthFile.created_at",
+    )
 
 
 class Volume(Base):
@@ -45,6 +55,7 @@ class Volume(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
     order_index: Mapped[int] = mapped_column(default=0)
+    kind: Mapped[str] = mapped_column(String(40), default="novel")
     title: Mapped[str] = mapped_column(String(200), default="")
     outline: Mapped[str] = mapped_column(Text, default="")
     summary: Mapped[str] = mapped_column(Text, default="")
@@ -120,6 +131,39 @@ class WorldSetting(Base):
     project: Mapped["Project"] = relationship(back_populates="settings")
 
 
+class Foreshadow(Base):
+    __tablename__ = "foreshadows"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
+    kind: Mapped[str] = mapped_column(String(40), default="foreshadow")
+    title: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(20), default="open")
+    introduced_at: Mapped[str] = mapped_column(String(200), default="")
+    payoff: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+
+    project: Mapped["Project"] = relationship(back_populates="foreshadows")
+
+
+class TruthFile(Base):
+    __tablename__ = "truth_files"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
+    kind: Mapped[str] = mapped_column(String(40), default="constraint")
+    title: Mapped[str] = mapped_column(String(200))
+    content: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(40), default="active")
+    scope: Mapped[str] = mapped_column(String(200), default="全书")
+    owner: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+    updated_at: Mapped[datetime] = mapped_column(default=_now)
+
+    project: Mapped["Project"] = relationship(back_populates="truth_files")
+
+
 class ChapterSummary(Base):
     __tablename__ = "chapter_summaries"
 
@@ -143,7 +187,7 @@ class MemoryChunk(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
-    source_type: Mapped[str] = mapped_column(String(40))  # setting / character / chapter_summary
+    source_type: Mapped[str] = mapped_column(String(40))  # setting / character / chapter_summary / foreshadow
     source_id: Mapped[str] = mapped_column(String(36), default="")
     text: Mapped[str] = mapped_column(Text, default="")
     keywords: Mapped[list] = mapped_column(JSON, default=list)

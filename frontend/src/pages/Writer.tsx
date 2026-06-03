@@ -1,9 +1,13 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { streamSSE } from "../api/sse";
 
 type Status = "idle" | "writing" | "done" | "error";
 
-export default function Writer() {
+type WriterProps = {
+  model?: string;
+};
+
+export default function Writer({ model }: WriterProps) {
   const [premise, setPremise] = useState(
     "一个生活在赛博朋克都市的年轻黑客，偶然发现了一段能改写记忆的代码。"
   );
@@ -13,27 +17,12 @@ export default function Writer() {
   );
   const [wordCount, setWordCount] = useState(1500);
 
-  const [models, setModels] = useState<string[]>([]);
-  const [model, setModel] = useState("");
-
   const [status, setStatus] = useState<Status>("idle");
   const [content, setContent] = useState("");
   const [error, setError] = useState("");
   const abortRef = useRef<AbortController | null>(null);
 
   const running = status === "writing";
-
-  useEffect(() => {
-    fetch("/api/models")
-      .then((r) => r.json())
-      .then((data: { models: string[]; default: string }) => {
-        setModels(data.models ?? []);
-        setModel(data.default || data.models?.[0] || "");
-      })
-      .catch(() => {
-        /* 模型列表获取失败时保持空，使用后端默认模型 */
-      });
-  }, []);
 
   async function generate() {
     setContent("");
@@ -97,16 +86,6 @@ export default function Writer() {
           value={wordCount}
           onChange={(e) => setWordCount(Number(e.target.value))}
         />
-
-        <label>模型</label>
-        <select value={model} onChange={(e) => setModel(e.target.value)}>
-          {models.length === 0 && <option value="">（使用后端默认）</option>}
-          {models.map((m) => (
-            <option key={m} value={m}>
-              {m}
-            </option>
-          ))}
-        </select>
 
         {running ? (
           <button onClick={stop}>停止生成</button>

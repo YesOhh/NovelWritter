@@ -6,7 +6,13 @@ from anthropic import AsyncAnthropic
 from app.config import settings
 
 # 构建客户端：若配置了 anthropic_base_url（如本地 Anthropic 兼容代理），则指向该端点。
-_client_kwargs: dict = {"api_key": settings.anthropic_api_key or "local-proxy"}
+_client_kwargs: dict = {}
+if settings.anthropic_api_key:
+    _client_kwargs["api_key"] = settings.anthropic_api_key
+elif settings.anthropic_auth_token:
+    _client_kwargs["auth_token"] = settings.anthropic_auth_token
+else:
+    _client_kwargs["api_key"] = "local-proxy"
 if settings.anthropic_base_url:
     _client_kwargs["base_url"] = settings.anthropic_base_url
 

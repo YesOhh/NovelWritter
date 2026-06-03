@@ -9,6 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import MemoryChunk
 
 
+ScoredChunk = tuple[float, list[str], MemoryChunk]
+
+
 async def index_chunk(
     session: AsyncSession,
     project_id: str,
@@ -42,6 +45,21 @@ def _score(query_keywords: list[str], query_text: str, chunk: MemoryChunk) -> fl
     return score
 
 
+def _matched_keywords(query_keywords: list[str], chunk: MemoryChunk) -> list[str]:
+    text_lower = (chunk.text or "").lower()
+    chunk_keywords = {keyword.lower() for keyword in (chunk.keywords or []) if keyword}
+    matches: list[str] = []
+    seen: set[str] = set()
+    for keyword in query_keywords:
+        lowered = keyword.lower()
+        if not lowered or lowered in seen:
+            continue
+        if lowered in chunk_keywords or lowered in text_lower:
+            matches.append(keyword)
+            seen.add(lowered)
+    return matches
+
+
 class Retriever:
     """关键词检索器。future: VectorRetriever(Retriever)。"""
 
@@ -54,21 +72,41 @@ class Retriever:
         k: int = 5,
         exclude_source_ids: set[str] | None = None,
     ) -> list[MemoryChunk]:
+        scored = await self.retrieve_scored(
+            session,
+            project_id=project_id,
+            query_text=query_text,
+            query_keywords=query_keywords,
+            k=k,
+            exclude_source_ids=exclude_source_ids,
+        )
+        return [chunk for _, _, chunk in scored]
+
+    async def retrieve_scored(
+        self,
+        session: AsyncSession,
+        project_id: str,
+        query_text: str,
+        query_keywords: list[str],
+        k: int = 5,
+        exclude_source_ids: set[str] | None = None,
+    ) -> list[ScoredChunk]:
         result = await session.execute(
             select(MemoryChunk).where(MemoryChunk.project_id == project_id)
         )
         chunks = list(result.scalars().all())
         exclude = exclude_source_ids or set()
         scored = [
-            (self._score(query_keywords, query_text, c), c)
+            (self._score(query_keywords, query_text, c), self._matched_keywords(query_keywords, c), c)
             for c in chunks
             if c.source_id not in exclude
         ]
         scored = [sc for sc in scored if sc[0] > 0]
         scored.sort(key=lambda sc: sc[0], reverse=True)
-        return [c for _, c in scored[:k]]
+        return scored[:k]
 
     _score = staticmethod(_score)
+    _matched_keywords = staticmethod(_matched_keywords)
 
 
 retriever = Retriever()
