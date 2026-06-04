@@ -643,6 +643,24 @@ export const api = {
         model,
       }),
     }),
+  applyReference: (
+    projectId: string,
+    body: {
+      apply_style?: boolean;
+      style_fingerprint?: StyleFingerprint;
+      style_stats?: StyleStats;
+      style_samples?: StyleSample[];
+      settings?: ReferenceSettingItem[];
+      characters?: ReferenceAnalyzeResult["characters"];
+      foreshadows?: ReferenceAnalyzeResult["foreshadows"];
+      redact_names?: string[];
+      source_text?: string;
+    }
+  ) =>
+    req<{ applied: boolean; created_counts: Record<string, number> }>(
+      `/api/projects/${projectId}/reference/apply`,
+      { method: "POST", body: JSON.stringify(body) }
+    ),
   ocrImages: (
     images: { media_type: string; data: string }[],
     instruction = "",

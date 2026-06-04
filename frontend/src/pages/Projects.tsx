@@ -57,6 +57,7 @@ const BUSY_LABELS: Record<string, string> = {
   "stall-apply": "应用停滞建议中…",
   "health-check": "长篇体检中…",
   reference: "分析参考资料中…",
+  "reference-apply": "写入选中内容中…",
   "reference-chapters": "导入参考章节中…",
   "reference-file": "读取文件中…",
   "reference-source": "更新拆书原文记录中…",
@@ -65,6 +66,27 @@ const BUSY_LABELS: Record<string, string> = {
 
 type ProjectsProps = {
   model?: string;
+};
+
+// 拆书结果里可勾选保留/编辑/删除的草稿项。
+type RefSettingDraft = { keep: boolean; category: string; key: string; value: string };
+type RefCharacterDraft = {
+  keep: boolean;
+  name: string;
+  personality: string;
+  motivation: string;
+  relationships: string;
+  appearance: string;
+  arc: string;
+};
+type RefForeshadowDraft = {
+  keep: boolean;
+  kind: string;
+  title: string;
+  description: string;
+  status: string;
+  introduced_at: string;
+  payoff: string;
 };
 
 type ContinuationAnchor = {
@@ -366,9 +388,13 @@ export default function Projects({ model }: ProjectsProps) {
   const [selectedCandidateIdx, setSelectedCandidateIdx] = useState<number[]>([]);
   const [referenceText, setReferenceText] = useState("");
   const [referenceFileName, setReferenceFileName] = useState("");
-  const [referenceApplyStyle, setReferenceApplyStyle] = useState(true);
-  const [referenceApplyResources, setReferenceApplyResources] = useState(false);
   const [referenceResult, setReferenceResult] = useState<ReferenceAnalyzeResult | null>(null);
+  // 拆书结果的可编辑草稿：用户勾选保留哪些部分，可编辑/删除后再写入。
+  const [refKeepStyle, setRefKeepStyle] = useState(true);
+  const [refSettings, setRefSettings] = useState<RefSettingDraft[]>([]);
+  const [refCharacters, setRefCharacters] = useState<RefCharacterDraft[]>([]);
+  const [refForeshadows, setRefForeshadows] = useState<RefForeshadowDraft[]>([]);
+  const [refAllNames, setRefAllNames] = useState<string[]>([]);
   const [referenceVolumeTitle, setReferenceVolumeTitle] = useState("参考拆书");
   const [referenceMaxChapters, setReferenceMaxChapters] = useState(12);
   const [referenceChapterResult, setReferenceChapterResult] = useState<ReferenceChapterImportResult | null>(null);
@@ -1310,17 +1336,103 @@ export default function Projects({ model }: ProjectsProps) {
       const result = await api.analyzeReference(
         selected.id,
         referenceText,
-        { apply_style: referenceApplyStyle, apply_resources: referenceApplyResources },
+        { apply_style: false, apply_resources: false },
         activeModel()
       );
       setReferenceResult(result);
-      if (referenceApplyStyle || referenceApplyResources) await open(selected.id);
+      // 初始化可勾选草稿：默认全部保留，用户可逐项编辑/删除后再写入。
+      setRefKeepStyle(true);
+      setRefSettings(
+        result.settings.map((s) => ({
+          keep: true,
+          category: s.category ?? "",
+          key: s.key ?? "",
+          value: s.value ?? "",
+        }))
+      );
+      setRefCharacters(
+        result.characters.map((c) => ({
+          keep: true,
+          name: c.name ?? "",
+          personality: c.profile?.personality ?? "",
+          motivation: c.profile?.motivation ?? "",
+          relationships: c.profile?.relationships ?? "",
+          appearance: c.profile?.appearance ?? "",
+          arc: c.arc ?? "",
+        }))
+      );
+      setRefForeshadows(
+        result.foreshadows.map((f) => ({
+          keep: true,
+          kind: f.kind ?? "foreshadow",
+          title: f.title ?? "",
+          description: f.description ?? "",
+          status: f.status ?? "open",
+          introduced_at: f.introduced_at ?? "",
+          payoff: f.payoff ?? "",
+        }))
+      );
+      setRefAllNames(result.characters.map((c) => c.name).filter((n) => n.trim()));
+      notify("已分析，请在下方勾选要保留的内容后点「应用选中」");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function applySelectedReference() {
+    if (!selected || !referenceResult) return;
+    const keptSettings = refSettings.filter((s) => s.keep && s.key.trim());
+    const keptCharacters = refCharacters.filter((c) => c.keep && c.name.trim());
+    const keptForeshadows = refForeshadows.filter((f) => f.keep && f.title.trim());
+    if (
+      !refKeepStyle &&
+      keptSettings.length === 0 &&
+      keptCharacters.length === 0 &&
+      keptForeshadows.length === 0
+    ) {
+      notify("没有勾选任何要保留的内容");
+      return;
+    }
+    setBusy("reference-apply");
+    setError("");
+    try {
+      const res = await api.applyReference(selected.id, {
+        apply_style: refKeepStyle,
+        style_fingerprint: referenceResult.style_fingerprint,
+        style_stats: referenceResult.style_stats,
+        style_samples: referenceResult.style_samples,
+        redact_names: refAllNames,
+        source_text: referenceText,
+        settings: keptSettings.map((s) => ({
+          category: s.category,
+          key: s.key,
+          value: s.value,
+        })),
+        characters: keptCharacters.map((c) => ({
+          name: c.name,
+          profile: {
+            personality: c.personality,
+            motivation: c.motivation,
+            relationships: c.relationships,
+            appearance: c.appearance,
+          },
+          arc: c.arc,
+        })),
+        foreshadows: keptForeshadows.map((f) => ({
+          kind: f.kind,
+          title: f.title,
+          description: f.description,
+          status: f.status,
+          introduced_at: f.introduced_at,
+          payoff: f.payoff,
+        })),
+      });
+      await open(selected.id);
+      const c = res.created_counts;
       notify(
-        referenceApplyResources
-          ? "已分析：文风与设定/角色/线索均已写入"
-          : referenceApplyStyle
-          ? "已分析并学习文风（未导入设定/角色/线索）"
-          : "参考资料已分析（未写入）"
+        `已写入：文风 ${c.style ?? 0} · 设定 ${c.settings ?? 0} · 角色 ${c.characters ?? 0} · 线索 ${c.foreshadows ?? 0}`
       );
     } catch (e) {
       setError((e as Error).message);
@@ -1328,6 +1440,19 @@ export default function Projects({ model }: ProjectsProps) {
       setBusy("");
     }
   }
+
+  const updateRefSetting = (i: number, patch: Partial<RefSettingDraft>) =>
+    setRefSettings((prev) => prev.map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
+  const removeRefSetting = (i: number) =>
+    setRefSettings((prev) => prev.filter((_, idx) => idx !== i));
+  const updateRefCharacter = (i: number, patch: Partial<RefCharacterDraft>) =>
+    setRefCharacters((prev) => prev.map((c, idx) => (idx === i ? { ...c, ...patch } : c)));
+  const removeRefCharacter = (i: number) =>
+    setRefCharacters((prev) => prev.filter((_, idx) => idx !== i));
+  const updateRefForeshadow = (i: number, patch: Partial<RefForeshadowDraft>) =>
+    setRefForeshadows((prev) => prev.map((f, idx) => (idx === i ? { ...f, ...patch } : f)));
+  const removeRefForeshadow = (i: number) =>
+    setRefForeshadows((prev) => prev.filter((_, idx) => idx !== i));
 
   async function importReferenceChapters() {
     if (!selected || referenceText.trim().length < 50) return;
@@ -2597,40 +2722,13 @@ export default function Projects({ model }: ProjectsProps) {
                   </label>
                 </div>
                 <div className="reference-actions">
-                  <div className="reference-apply-options">
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={referenceApplyStyle}
-                        onChange={(e) => setReferenceApplyStyle(e.target.checked)}
-                      />
-                      学习文风（写入文风指纹/统计/样例，仅用于风格对齐）
-                    </label>
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={referenceApplyResources}
-                        onChange={(e) => setReferenceApplyResources(e.target.checked)}
-                      />
-                      导入设定/角色/线索为本书正典
-                      <small className="reference-apply-warn">
-                        会把参考书自己的世界观、人物、情节搬进本项目并被正文直接沿用；只想借鉴写法时请保持关闭。
-                      </small>
-                    </label>
-                  </div>
                   <div className="reference-action-buttons">
                     <button
                       className="gen"
                       disabled={busy !== "" || referenceText.trim().length < 50}
                       onClick={analyzeReference}
                     >
-                      {busy === "reference"
-                        ? "分析中…"
-                        : referenceApplyResources
-                        ? "分析并写入（含设定）"
-                        : referenceApplyStyle
-                        ? "分析并学习文风"
-                        : "仅分析"}
+                      {busy === "reference" ? "分析中…" : "分析拆书（先看后选）"}
                     </button>
                     <button
                       className="secondary"
@@ -2643,23 +2741,22 @@ export default function Projects({ model }: ProjectsProps) {
                 </div>
                 {referenceResult && (
                   <div className="reference-result">
-                    <div className="tracking-metric-row">
-                      <span>写入</span>
-                      <strong>{referenceResult.applied ? "已写入" : "未写入"}</strong>
-                    </div>
-                    {referenceResult.applied && (
-                      <div className="reference-counts">
-                        <span>设定 {referenceResult.created_counts.settings ?? 0}</span>
-                        <span>角色 {referenceResult.created_counts.characters ?? 0}</span>
-                        <span>线索 {referenceResult.created_counts.foreshadows ?? 0}</span>
-                        <span>重复 {referenceResult.created_counts.duplicates ?? 0}</span>
-                        <span>冲突 {referenceResult.created_counts.conflicts ?? 0}</span>
+                    <div className="reference-apply-bar">
+                      <div className="meta">
+                        勾选要保留的内容，可直接编辑或删除，确认后点「应用选中」写入项目。文风指纹与样例会自动去除原书人名。
                       </div>
-                    )}
+                      <button
+                        className="gen"
+                        disabled={busy !== ""}
+                        onClick={applySelectedReference}
+                      >
+                        {busy === "reference-apply" ? "写入中…" : "应用选中"}
+                      </button>
+                    </div>
                     {(referenceResult.conflicts ?? []).length > 0 && (
                       <div className="reference-conflicts">
                         <strong>写入检查</strong>
-                        <div className="meta">重复项会自动跳过；可能冲突的内容不会自动覆盖已有资料。</div>
+                        <div className="meta">同名的设定/角色/线索若项目里已存在，写入时会自动跳过，不会覆盖已有资料。</div>
                         {(referenceResult.conflicts ?? []).slice(0, 8).map((item: ReferenceConflictItem, idx: number) => (
                           <div key={`${item.kind}-${item.name}-${idx}`} className={`reference-conflict ${item.status}`}>
                             <div className="thread-card-title">
@@ -2676,40 +2773,122 @@ export default function Projects({ model }: ProjectsProps) {
                         )}
                       </div>
                     )}
-                    <div className="reference-style">
-                      <strong>文风指纹</strong>
-                      <p>{referenceResult.style_fingerprint.summary || "暂无摘要"}</p>
-                      {referenceResult.style_fingerprint.sentence_rhythm && (
-                        <p>节奏：{referenceResult.style_fingerprint.sentence_rhythm}</p>
-                      )}
-                      {referenceResult.style_fingerprint.dialogue && (
-                        <p>对白：{referenceResult.style_fingerprint.dialogue}</p>
-                      )}
-                      {referenceResult.style_stats?.sample_chars > 0 && (
-                        <StyleStatsPanel stats={referenceResult.style_stats} compact />
-                      )}
-                      <StyleSamplesPanel samples={referenceResult.style_samples ?? []} compact />
-                    </div>
-                    <div className="reference-preview-grid">
-                      <div>
-                        <strong>设定</strong>
-                        {referenceResult.settings.slice(0, 4).map((item, idx) => (
-                          <div key={idx} className="meta">{item.category ? `[${item.category}] ` : ""}{item.key}</div>
-                        ))}
-                      </div>
-                      <div>
-                        <strong>角色</strong>
-                        {referenceResult.characters.slice(0, 4).map((item) => (
-                          <div key={item.name} className="meta">{item.name}</div>
-                        ))}
-                      </div>
-                      <div>
-                        <strong>线索</strong>
-                        {referenceResult.foreshadows.slice(0, 4).map((item) => (
-                          <div key={item.title} className="meta">{item.title}</div>
-                        ))}
+                    <div className="reference-section">
+                      <label className="reference-keep-head">
+                        <input
+                          type="checkbox"
+                          checked={refKeepStyle}
+                          onChange={(e) => setRefKeepStyle(e.target.checked)}
+                        />
+                        <strong>文风指纹</strong>
+                        <small>仅参考写法，自动去除人名/情节</small>
+                      </label>
+                      <div className="reference-style">
+                        <p>{referenceResult.style_fingerprint.summary || "暂无摘要"}</p>
+                        {referenceResult.style_fingerprint.sentence_rhythm && (
+                          <p>节奏：{referenceResult.style_fingerprint.sentence_rhythm}</p>
+                        )}
+                        {referenceResult.style_fingerprint.dialogue && (
+                          <p>对白：{referenceResult.style_fingerprint.dialogue}</p>
+                        )}
+                        {referenceResult.style_stats?.sample_chars > 0 && (
+                          <StyleStatsPanel stats={referenceResult.style_stats} compact />
+                        )}
+                        <StyleSamplesPanel samples={referenceResult.style_samples ?? []} compact />
                       </div>
                     </div>
+                    {refSettings.length > 0 && (
+                      <div className="reference-section">
+                        <strong>设定（保留 {refSettings.filter((s) => s.keep).length}/{refSettings.length}）</strong>
+                        {refSettings.map((s, i) => (
+                          <div key={i} className={`reference-pick-item ${s.keep ? "" : "dropped"}`}>
+                            <div className="reference-pick-head">
+                              <input
+                                type="checkbox"
+                                checked={s.keep}
+                                onChange={(e) => updateRefSetting(i, { keep: e.target.checked })}
+                              />
+                              <input
+                                className="reference-pick-key"
+                                value={s.category}
+                                placeholder="分类"
+                                onChange={(e) => updateRefSetting(i, { category: e.target.value })}
+                              />
+                              <input
+                                className="reference-pick-key"
+                                value={s.key}
+                                placeholder="名称"
+                                onChange={(e) => updateRefSetting(i, { key: e.target.value })}
+                              />
+                              <button className="link-danger" onClick={() => removeRefSetting(i)}>删除</button>
+                            </div>
+                            <textarea
+                              rows={2}
+                              value={s.value}
+                              placeholder="内容"
+                              onChange={(e) => updateRefSetting(i, { value: e.target.value })}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {refCharacters.length > 0 && (
+                      <div className="reference-section">
+                        <strong>角色（保留 {refCharacters.filter((c) => c.keep).length}/{refCharacters.length}）</strong>
+                        {refCharacters.map((c, i) => (
+                          <div key={i} className={`reference-pick-item ${c.keep ? "" : "dropped"}`}>
+                            <div className="reference-pick-head">
+                              <input
+                                type="checkbox"
+                                checked={c.keep}
+                                onChange={(e) => updateRefCharacter(i, { keep: e.target.checked })}
+                              />
+                              <input
+                                className="reference-pick-key"
+                                value={c.name}
+                                placeholder="角色名"
+                                onChange={(e) => updateRefCharacter(i, { name: e.target.value })}
+                              />
+                              <button className="link-danger" onClick={() => removeRefCharacter(i)}>删除</button>
+                            </div>
+                            <textarea rows={1} value={c.personality} placeholder="性格" onChange={(e) => updateRefCharacter(i, { personality: e.target.value })} />
+                            <textarea rows={1} value={c.motivation} placeholder="动机" onChange={(e) => updateRefCharacter(i, { motivation: e.target.value })} />
+                            <textarea rows={1} value={c.relationships} placeholder="关系" onChange={(e) => updateRefCharacter(i, { relationships: e.target.value })} />
+                            <textarea rows={1} value={c.appearance} placeholder="外貌" onChange={(e) => updateRefCharacter(i, { appearance: e.target.value })} />
+                            <textarea rows={1} value={c.arc} placeholder="弧光" onChange={(e) => updateRefCharacter(i, { arc: e.target.value })} />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {refForeshadows.length > 0 && (
+                      <div className="reference-section">
+                        <strong>线索/伏笔（保留 {refForeshadows.filter((f) => f.keep).length}/{refForeshadows.length}）</strong>
+                        {refForeshadows.map((f, i) => (
+                          <div key={i} className={`reference-pick-item ${f.keep ? "" : "dropped"}`}>
+                            <div className="reference-pick-head">
+                              <input
+                                type="checkbox"
+                                checked={f.keep}
+                                onChange={(e) => updateRefForeshadow(i, { keep: e.target.checked })}
+                              />
+                              <input
+                                className="reference-pick-key"
+                                value={f.title}
+                                placeholder="标题"
+                                onChange={(e) => updateRefForeshadow(i, { title: e.target.value })}
+                              />
+                              <button className="link-danger" onClick={() => removeRefForeshadow(i)}>删除</button>
+                            </div>
+                            <textarea
+                              rows={2}
+                              value={f.description}
+                              placeholder="说明"
+                              onChange={(e) => updateRefForeshadow(i, { description: e.target.value })}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
                 {referenceChapterResult && (

@@ -289,7 +289,7 @@ def format_style_stats_prompt(stats: dict | None) -> str:
 
 
 def redact_names(text: str, names: list[str] | None, placeholder: str = "某角色") -> str:
-    """把样例文本中的原书专名（角色名）替换为占位符，避免文风样例泄露旧姓名。"""
+    """把样例文本中的原书专名（角色名）替换为占位符，避免文风样例泄漏旧姓名。"""
     out = text or ""
     if not out or not names:
         return out
@@ -298,6 +298,35 @@ def redact_names(text: str, names: list[str] | None, placeholder: str = "某角�
         if len(name) >= 2:
             out = out.replace(name, placeholder)
     return out
+
+
+def filter_stats_terms(stats: dict | None, names: list[str] | None) -> dict:
+    """从文风统计的高频词条中剔除原书专名（角色名），并重算注入 prompt。
+
+    文风只用于参考风格，高频词里出现的具体人名/专名属于内容而非风格，必须移除。
+    """
+    if not isinstance(stats, dict):
+        return stats or {}
+    cleaned_names = [(n or "").strip() for n in (names or []) if (n or "").strip() and len((n or "").strip()) >= 2]
+    if not cleaned_names:
+        return stats
+
+    def is_name_related(term: str) -> bool:
+        candidate = (term or "").strip()
+        if not candidate:
+            return False
+        return any(candidate in name or name in candidate for name in cleaned_names)
+
+    next_stats = {**stats}
+    for field in ("top_terms", "overused_terms"):
+        items = next_stats.get(field)
+        if isinstance(items, list):
+            next_stats[field] = [
+                item for item in items if not is_name_related(str(item.get("term", "")))
+            ]
+    next_stats["prompt"] = format_style_stats_prompt(next_stats)
+    return next_stats
+
 
 
 def format_style_samples_prompt(samples: list[dict] | None, names: list[str] | None = None) -> str:

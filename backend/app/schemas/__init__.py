@@ -505,6 +505,27 @@ class ReferenceSourceRenameRequest(BaseModel):
     label: str = Field(default="", max_length=120)
 
 
+class ReferenceApplyRequest(BaseModel):
+    """用户在拆书结果里勾选/编辑后，要写入项目的精选内容。"""
+
+    apply_style: bool = False
+    style_fingerprint: StyleFingerprint = Field(default_factory=StyleFingerprint)
+    style_stats: StyleStats = Field(default_factory=StyleStats)
+    style_samples: list[StyleSample] = []
+    settings: list[ReferenceSettingItem] = []
+    characters: list[CharacterItem] = []
+    foreshadows: list[ReferenceForeshadowItem] = []
+    # 用于从文风/样例中清洗的原书专名（通常是全部被识别的角色名）。
+    redact_names: list[str] = []
+    # 一并保留的本次拆书原文（便于回看），留空则不保存。
+    source_text: str = Field(default="", max_length=60000)
+
+
+class ReferenceApplyResult(BaseModel):
+    applied: bool = True
+    created_counts: dict = Field(default_factory=dict)
+
+
 class ReferenceAnalyzeResult(BaseModel):
     style_fingerprint: StyleFingerprint = Field(default_factory=StyleFingerprint)
     style_stats: StyleStats = Field(default_factory=StyleStats)

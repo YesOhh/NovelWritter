@@ -11,6 +11,7 @@ from app.agents.reference_agent import analyze_reference_text
 from app.agents.style_stats import (
     analyze_style_stats,
     extract_style_samples,
+    filter_stats_terms,
     format_style_samples_prompt,
     redact_names,
 )
@@ -21,6 +22,8 @@ from app.memory.retriever import index_chunk
 from app.models import Chapter, Character, EntityState, Foreshadow, Project, Volume, WorldSetting
 from app.schemas import (
     ReferenceAnalyzeRequest,
+    ReferenceApplyRequest,
+    ReferenceApplyResult,
     ReferenceConflictItem,
     ReferenceAnalyzeResult,
     ReferenceChapterImportRequest,
@@ -28,6 +31,7 @@ from app.schemas import (
     ReferenceChapterTimelineItem,
     ReferenceSourceItem,
     ReferenceSourceRenameRequest,
+    StyleFingerprint,
 )
 
 router = APIRouter(prefix="/api", tags=["reference"])
@@ -38,8 +42,8 @@ _CHAPTER_HEADING_RE = re.compile(
 )
 
 
-def _style_prompt(result: ReferenceAnalyzeResult) -> str:
-    fp = result.style_fingerprint
+def _style_prompt(fp: "StyleFingerprint", redact: list[str] | None = None) -> str:
+    names = [name for name in (redact or []) if (name or "").strip()]
     lines = [line for line in [
         f"总体风格：{fp.summary}",
         f"叙述视角：{fp.narrative_pov}",
@@ -52,7 +56,8 @@ def _style_prompt(result: ReferenceAnalyzeResult) -> str:
     ] if line.split("：", 1)[-1]]
     if fp.taboos:
         lines.append("避免：" + "；".join(fp.taboos))
-    return "\n".join(lines)
+    # 文风只参考风格：去除文风描述中夹带的原书角色名等专名。
+    return redact_names("\n".join(lines), names)
 
 
 def _style_stats_of(text: str) -> dict:
@@ -65,19 +70,23 @@ def _style_samples_of(text: str) -> list[dict]:
 
 def _merge_style_guide(
     project: Project,
-    result: ReferenceAnalyzeResult | None = None,
+    style_fingerprint: "StyleFingerprint | None" = None,
     style_stats: dict | None = None,
     style_samples: list[dict] | None = None,
     redact: list[str] | None = None,
 ) -> None:
     existing_style = project.style_guide if isinstance(project.style_guide, dict) else {}
     next_style = {**existing_style}
-    if result is not None:
-        next_style["style"] = _style_prompt(result)
-        next_style["style_fingerprint"] = result.style_fingerprint.model_dump()
+    if style_fingerprint is not None:
+        names = [name for name in (redact or []) if (name or "").strip()]
+        next_style["style"] = _style_prompt(style_fingerprint, names)
+        next_style["style_fingerprint"] = style_fingerprint.model_dump()
     if style_stats:
-        next_style["style_stats"] = style_stats
-        next_style["style_stats_prompt"] = style_stats.get("prompt", "")
+        # 文风只参考风格：从高频词中剔除原书角色名等专名。
+        names = [name for name in (redact or []) if (name or "").strip()]
+        cleaned_stats = filter_stats_terms(style_stats, names)
+        next_style["style_stats"] = cleaned_stats
+        next_style["style_stats_prompt"] = cleaned_stats.get("prompt", "")
     if style_samples:
         names = [name for name in (redact or []) if (name or "").strip()]
         # 存储前先把样例里的原书专名匿名化，避免后续生成/展示泄露旧姓名。
@@ -249,6 +258,13 @@ async def analyze_project_reference(
     style_stats = _style_stats_of(body.text)
     style_samples = _style_samples_of(body.text)
     result = await analyze_reference_text(body.text, model=resolve_project_model(project, body.model))
+    # 文风只参考风格：从高频词与样例片段中去除原书角色名等专名。
+    reference_names = [item.name for item in result.characters if item.name.strip()]
+    style_stats = filter_stats_terms(style_stats, reference_names)
+    style_samples = [
+        {**sample, "text": redact_names(sample.get("text", ""), reference_names)}
+        for sample in style_samples
+    ]
     result.style_stats = style_stats
     result.style_samples = style_samples
     existing_setting_res = await session.execute(
@@ -352,7 +368,7 @@ async def analyze_project_reference(
     if body.apply_style:
         _merge_style_guide(
             project,
-            result=result,
+            style_fingerprint=result.style_fingerprint,
             style_stats=style_stats,
             style_samples=style_samples,
             redact=[item.name for item in result.characters if item.name.strip()],
@@ -446,6 +462,155 @@ async def analyze_project_reference(
     result.applied = body.apply_resources
     result.created_counts = created_counts
     return result
+
+
+async def _write_reference_resources(
+    session: AsyncSession,
+    project_id: str,
+    settings: list,
+    characters: list,
+    foreshadows: list,
+) -> dict:
+    """把用户精选/编辑后的设定、角色、伏笔写入项目，自动按名称去重。"""
+    existing_setting_res = await session.execute(
+        select(WorldSetting).where(WorldSetting.project_id == project_id)
+    )
+    existing_settings = {
+        (s.category.strip().lower(), s.key.strip().lower()): s
+        for s in existing_setting_res.scalars().all()
+    }
+    existing_character_res = await session.execute(
+        select(Character).where(Character.project_id == project_id)
+    )
+    existing_characters = {
+        c.name.strip().lower() for c in existing_character_res.scalars().all()
+    }
+    existing_thread_res = await session.execute(
+        select(Foreshadow).where(Foreshadow.project_id == project_id)
+    )
+    existing_threads = {
+        f.title.strip().lower() for f in existing_thread_res.scalars().all()
+    }
+
+    counts = {"settings": 0, "characters": 0, "foreshadows": 0}
+
+    for item in settings:
+        key = (item.key or "").strip()
+        if not key:
+            continue
+        marker = ((item.category or "").strip().lower(), key.lower())
+        if marker in existing_settings:
+            continue
+        setting = WorldSetting(
+            project_id=project_id,
+            category=(item.category or "").strip(),
+            key=key,
+            value=(item.value or "").strip(),
+        )
+        session.add(setting)
+        await session.flush()
+        await index_chunk(
+            session,
+            project_id=project_id,
+            source_type="setting",
+            source_id=setting.id,
+            text=_setting_text(setting),
+            keywords=_setting_keywords(setting),
+        )
+        existing_settings[marker] = setting
+        counts["settings"] += 1
+
+    for item in characters:
+        name = (item.name or "").strip()
+        if not name or name.lower() in existing_characters:
+            continue
+        character = Character(
+            project_id=project_id,
+            name=name,
+            profile=item.profile.model_dump(),
+            arc=(item.arc or "").strip(),
+        )
+        session.add(character)
+        await session.flush()
+        p = character.profile or {}
+        await index_chunk(
+            session,
+            project_id=project_id,
+            source_type="character",
+            source_id=character.id,
+            text=f"角色 {character.name}：{p.get('personality', '')} 动机:{p.get('motivation', '')} 关系:{p.get('relationships', '')} 弧光:{character.arc}",
+            keywords=[character.name],
+        )
+        existing_characters.add(name.lower())
+        counts["characters"] += 1
+
+    for item in foreshadows:
+        title = (item.title or "").strip()
+        if not title or title.lower() in existing_threads:
+            continue
+        thread = Foreshadow(
+            project_id=project_id,
+            kind=item.kind or "foreshadow",
+            title=title,
+            description=(item.description or "").strip(),
+            status=item.status or "open",
+            introduced_at=(item.introduced_at or "").strip(),
+            payoff=(item.payoff or "").strip(),
+        )
+        session.add(thread)
+        await session.flush()
+        await index_chunk(
+            session,
+            project_id=project_id,
+            source_type="foreshadow",
+            source_id=thread.id,
+            text=_thread_text(thread),
+            keywords=_thread_keywords(thread),
+        )
+        existing_threads.add(title.lower())
+        counts["foreshadows"] += 1
+
+    return counts
+
+
+@router.post("/projects/{project_id}/reference/apply", response_model=ReferenceApplyResult)
+async def apply_project_reference(
+    project_id: str,
+    body: ReferenceApplyRequest,
+    session: AsyncSession = Depends(get_session),
+) -> ReferenceApplyResult:
+    """写入用户在拆书结果里勾选保留/编辑过的内容。"""
+    project = await session.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="项目不存在")
+
+    redact = [name for name in body.redact_names if (name or "").strip()]
+    created_counts = {"settings": 0, "characters": 0, "foreshadows": 0, "style": 0}
+
+    if body.apply_style:
+        _merge_style_guide(
+            project,
+            style_fingerprint=body.style_fingerprint,
+            style_stats=body.style_stats.model_dump(),
+            style_samples=[s.model_dump() for s in body.style_samples],
+            redact=redact,
+        )
+        created_counts["style"] = 1
+
+    if body.source_text.strip():
+        _store_reference_source(project, body.source_text)
+
+    counts = await _write_reference_resources(
+        session,
+        project_id,
+        body.settings,
+        body.characters,
+        body.foreshadows,
+    )
+    created_counts.update(counts)
+
+    await session.commit()
+    return ReferenceApplyResult(applied=True, created_counts=created_counts)
 
 
 def _reference_sources_list(project: Project) -> list[dict]:
