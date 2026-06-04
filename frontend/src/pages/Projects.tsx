@@ -88,6 +88,12 @@ type RefForeshadowDraft = {
   introduced_at: string;
   payoff: string;
 };
+type RefSampleDraft = {
+  keep: boolean;
+  kind: string;
+  label: string;
+  text: string;
+};
 
 type ContinuationAnchor = {
   chapter_id?: string;
@@ -394,6 +400,7 @@ export default function Projects({ model }: ProjectsProps) {
   const [refSettings, setRefSettings] = useState<RefSettingDraft[]>([]);
   const [refCharacters, setRefCharacters] = useState<RefCharacterDraft[]>([]);
   const [refForeshadows, setRefForeshadows] = useState<RefForeshadowDraft[]>([]);
+  const [refSamples, setRefSamples] = useState<RefSampleDraft[]>([]);
   const [refAllNames, setRefAllNames] = useState<string[]>([]);
   const [referenceVolumeTitle, setReferenceVolumeTitle] = useState("参考拆书");
   const [referenceMaxChapters, setReferenceMaxChapters] = useState(12);
@@ -1361,6 +1368,7 @@ export default function Projects({ model }: ProjectsProps) {
           arc: c.arc ?? "",
         }))
       );
+      setRefAllNames(result.characters.map((c) => c.name).filter((n) => n.trim()));
       setRefForeshadows(
         result.foreshadows.map((f) => ({
           keep: true,
@@ -1370,6 +1378,14 @@ export default function Projects({ model }: ProjectsProps) {
           status: f.status ?? "open",
           introduced_at: f.introduced_at ?? "",
           payoff: f.payoff ?? "",
+        }))
+      );
+      setRefSamples(
+        (result.style_samples ?? []).map((s) => ({
+          keep: true,
+          kind: s.kind ?? "narration",
+          label: s.label ?? "样例",
+          text: s.text ?? "",
         }))
       );
       setRefAllNames(result.characters.map((c) => c.name).filter((n) => n.trim()));
@@ -1402,7 +1418,14 @@ export default function Projects({ model }: ProjectsProps) {
         apply_style: refKeepStyle,
         style_fingerprint: referenceResult.style_fingerprint,
         style_stats: referenceResult.style_stats,
-        style_samples: referenceResult.style_samples,
+        style_samples: refSamples
+          .filter((s) => s.keep && s.text.trim())
+          .map((s) => ({
+            kind: s.kind,
+            label: s.label,
+            text: s.text,
+            char_count: s.text.length,
+          })),
         redact_names: refAllNames,
         source_text: referenceText,
         settings: keptSettings.map((s) => ({
@@ -1453,6 +1476,10 @@ export default function Projects({ model }: ProjectsProps) {
     setRefForeshadows((prev) => prev.map((f, idx) => (idx === i ? { ...f, ...patch } : f)));
   const removeRefForeshadow = (i: number) =>
     setRefForeshadows((prev) => prev.filter((_, idx) => idx !== i));
+  const updateRefSample = (i: number, patch: Partial<RefSampleDraft>) =>
+    setRefSamples((prev) => prev.map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
+  const removeRefSample = (i: number) =>
+    setRefSamples((prev) => prev.filter((_, idx) => idx !== i));
 
   async function importReferenceChapters() {
     if (!selected || referenceText.trim().length < 50) return;
@@ -2794,9 +2821,39 @@ export default function Projects({ model }: ProjectsProps) {
                         {referenceResult.style_stats?.sample_chars > 0 && (
                           <StyleStatsPanel stats={referenceResult.style_stats} compact />
                         )}
-                        <StyleSamplesPanel samples={referenceResult.style_samples ?? []} compact />
                       </div>
                     </div>
+                    {refSamples.length > 0 && (
+                      <div className="reference-section">
+                        <strong>样例片段库（保留 {refSamples.filter((s) => s.keep).length}/{refSamples.length}）</strong>
+                        <div className="meta">样例只用于风格对齐，可编辑或删除；保留的样例已自动去除原书人名。</div>
+                        {refSamples.map((s, i) => (
+                          <div key={i} className={`reference-pick-item ${s.keep ? "" : "dropped"}`}>
+                            <div className="reference-pick-head">
+                              <input
+                                type="checkbox"
+                                checked={s.keep}
+                                onChange={(e) => updateRefSample(i, { keep: e.target.checked })}
+                              />
+                              <input
+                                className="reference-pick-key"
+                                value={s.label}
+                                placeholder="标签"
+                                onChange={(e) => updateRefSample(i, { label: e.target.value })}
+                              />
+                              <small>{s.text.length} 字</small>
+                              <button className="link-danger" onClick={() => removeRefSample(i)}>删除</button>
+                            </div>
+                            <textarea
+                              rows={3}
+                              value={s.text}
+                              placeholder="样例片段"
+                              onChange={(e) => updateRefSample(i, { text: e.target.value })}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    )}
                     {refSettings.length > 0 && (
                       <div className="reference-section">
                         <strong>设定（保留 {refSettings.filter((s) => s.keep).length}/{refSettings.length}）</strong>
