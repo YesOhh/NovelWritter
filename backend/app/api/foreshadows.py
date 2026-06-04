@@ -3,7 +3,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents.tracking_agent import scan_stalled_threads
+from app.agents.tracking_agent import (
+    extract_foreshadows_from_chapter,
+    scan_stalled_threads,
+)
 from app.db import get_session
 from app.llm.model_resolver import resolve_project_model
 from app.memory.retriever import index_chunk
@@ -17,6 +20,8 @@ from app.models import (
 )
 from app.schemas import (
     ForeshadowCreate,
+    ForeshadowExtractRequest,
+    ForeshadowExtractResult,
     ForeshadowOut,
     ForeshadowUpdate,
     TrackingBatchStatusRequest,
@@ -142,6 +147,49 @@ async def delete_foreshadow(
     )
     await session.delete(item)
     await session.commit()
+
+
+@router.post(
+    "/chapters/{chapter_id}/foreshadows/extract",
+    response_model=ForeshadowExtractResult,
+)
+async def extract_chapter_foreshadows(
+    chapter_id: str,
+    body: ForeshadowExtractRequest,
+    session: AsyncSession = Depends(get_session),
+) -> ForeshadowExtractResult:
+    """从单章正文中识别值得登记的伏笔/支线候选项（只返回建议，不自动写入）。"""
+    row = await session.execute(
+        select(Chapter, Volume)
+        .join(Volume, Chapter.volume_id == Volume.id)
+        .where(Chapter.id == chapter_id)
+    )
+    pair = row.first()
+    if pair is None:
+        raise HTTPException(status_code=404, detail="章节不存在")
+    chapter, volume = pair
+    if not (chapter.content or "").strip():
+        raise HTTPException(status_code=400, detail="本章暂无正文，无法抽取线索")
+
+    project = await session.get(Project, volume.project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="项目不存在")
+
+    existing_result = await session.execute(
+        select(Foreshadow.title).where(Foreshadow.project_id == volume.project_id)
+    )
+    existing_titles = [t for t in existing_result.scalars().all() if t]
+
+    result = await extract_foreshadows_from_chapter(
+        content=chapter.content or "",
+        chapter_title=chapter.title or "",
+        chapter_outline=chapter.outline or "",
+        existing_titles=existing_titles,
+        model=resolve_project_model(project, body.model),
+    )
+    result.chapter_id = chapter.id
+    result.chapter_title = chapter.title or ""
+    return result
 
 
 def _compact(text: str, limit: int = 600) -> str:

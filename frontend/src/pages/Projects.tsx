@@ -15,6 +15,8 @@ import {
   type TrackingSuggestion,
   type TrackingStallResult,
   type TrackingStallSuggestion,
+  type ProjectHealthResult,
+  type ForeshadowExtractResult,
   type ReferenceAnalyzeResult,
   type ReferenceChapterImportResult,
   type ReferenceConflictItem,
@@ -147,6 +149,76 @@ function StyleSamplesPanel({ samples, compact = false }: { samples: StyleSample[
   );
 }
 
+function CharacterEditForm(props: {
+  name: string;
+  personality: string;
+  motivation: string;
+  relationships: string;
+  appearance: string;
+  arc: string;
+  busy: boolean;
+  onName: (v: string) => void;
+  onPersonality: (v: string) => void;
+  onMotivation: (v: string) => void;
+  onRelationships: (v: string) => void;
+  onAppearance: (v: string) => void;
+  onArc: (v: string) => void;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="char-edit-form">
+      <input
+        value={props.name}
+        placeholder="角色名"
+        onChange={(e) => props.onName(e.target.value)}
+      />
+      <textarea
+        value={props.personality}
+        placeholder="性格"
+        rows={2}
+        onChange={(e) => props.onPersonality(e.target.value)}
+      />
+      <textarea
+        value={props.motivation}
+        placeholder="动机"
+        rows={2}
+        onChange={(e) => props.onMotivation(e.target.value)}
+      />
+      <textarea
+        value={props.relationships}
+        placeholder="关系"
+        rows={2}
+        onChange={(e) => props.onRelationships(e.target.value)}
+      />
+      <textarea
+        value={props.appearance}
+        placeholder="外貌"
+        rows={2}
+        onChange={(e) => props.onAppearance(e.target.value)}
+      />
+      <textarea
+        value={props.arc}
+        placeholder="弧光"
+        rows={2}
+        onChange={(e) => props.onArc(e.target.value)}
+      />
+      <div className="card-actions">
+        <button
+          className="mini"
+          disabled={props.busy || !props.name.trim()}
+          onClick={props.onSave}
+        >
+          {props.busy ? "保存中…" : "保存"}
+        </button>
+        <button className="mini secondary" disabled={props.busy} onClick={props.onCancel}>
+          取消
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function Projects({ model }: ProjectsProps) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selected, setSelected] = useState<ProjectDetail | null>(null);
@@ -179,6 +251,8 @@ export default function Projects({ model }: ProjectsProps) {
   const [editingChapter, setEditingChapter] = useState<string>("");
   const [savingChapter, setSavingChapter] = useState<string>("");
   const [draftText, setDraftText] = useState("");
+  // 本章生成的目标字数（后端允许 200–6000）。
+  const [genWordCount, setGenWordCount] = useState(1500);
   const [outlineVolumeCount, setOutlineVolumeCount] = useState(3);
   const [outlineChaptersPerVolume, setOutlineChaptersPerVolume] = useState(5);
   // 主区当前查看/写作的章节 id。
@@ -207,6 +281,23 @@ export default function Projects({ model }: ProjectsProps) {
   const [selectedTruthActionKeys, setSelectedTruthActionKeys] = useState<string[]>([]);
   const [stallResult, setStallResult] = useState<TrackingStallResult | null>(null);
   const [selectedStallIds, setSelectedStallIds] = useState<string[]>([]);
+  const [healthResult, setHealthResult] = useState<ProjectHealthResult | null>(null);
+  // 角色卡人工编辑表单（""=未编辑，"__new"=新增）。
+  const [editingCharId, setEditingCharId] = useState<string>("");
+  const [charName, setCharName] = useState("");
+  const [charPersonality, setCharPersonality] = useState("");
+  const [charMotivation, setCharMotivation] = useState("");
+  const [charRelationships, setCharRelationships] = useState("");
+  const [charAppearance, setCharAppearance] = useState("");
+  const [charArc, setCharArc] = useState("");
+  // 章节大纲人工编辑表单。
+  const [editingOutlineId, setEditingOutlineId] = useState<string>("");
+  const [outlineDraftTitle, setOutlineDraftTitle] = useState("");
+  const [outlineDraftText, setOutlineDraftText] = useState("");
+  // 从章节正文抽取伏笔候选项。
+  const [extractResult, setExtractResult] = useState<ForeshadowExtractResult | null>(null);
+  const [extractChapterId, setExtractChapterId] = useState<string>("");
+  const [selectedCandidateIdx, setSelectedCandidateIdx] = useState<number[]>([]);
   const [referenceText, setReferenceText] = useState("");
   const [referenceFileName, setReferenceFileName] = useState("");
   const [referenceApply, setReferenceApply] = useState(true);
@@ -284,6 +375,7 @@ export default function Projects({ model }: ProjectsProps) {
         setStallResult(null);
         setSelectedStallIds([]);
         setTruthCheckResult(null);
+        setHealthResult(null);
       }
       const detail = await api.getProject(id);
       setSelected(detail);
@@ -513,6 +605,161 @@ export default function Projects({ model }: ProjectsProps) {
     try {
       await api.deleteForeshadow(threadId);
       if (editingThreadId === threadId) resetThreadForm();
+      await open(selected.id);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  function resetCharForm() {
+    setEditingCharId("");
+    setCharName("");
+    setCharPersonality("");
+    setCharMotivation("");
+    setCharRelationships("");
+    setCharAppearance("");
+    setCharArc("");
+  }
+
+  function startNewChar() {
+    resetCharForm();
+    setEditingCharId("__new");
+  }
+
+  function editChar(c: CharacterOut) {
+    setEditingCharId(c.id);
+    setCharName(c.name);
+    setCharPersonality(c.profile.personality || "");
+    setCharMotivation(c.profile.motivation || "");
+    setCharRelationships(c.profile.relationships || "");
+    setCharAppearance(c.profile.appearance || "");
+    setCharArc(c.arc || "");
+  }
+
+  async function saveChar() {
+    if (!selected || !charName.trim()) return;
+    setBusy("character-edit");
+    setError("");
+    try {
+      const body = {
+        name: charName.trim(),
+        profile: {
+          personality: charPersonality.trim(),
+          motivation: charMotivation.trim(),
+          relationships: charRelationships.trim(),
+          appearance: charAppearance.trim(),
+        },
+        arc: charArc.trim(),
+      };
+      if (editingCharId === "__new") await api.createCharacter(selected.id, body);
+      else await api.updateCharacter(editingCharId, body);
+      resetCharForm();
+      await open(selected.id);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function deleteChar(characterId: string) {
+    if (!selected) return;
+    if (!confirm("确定删除该角色卡？检索片段会一并删除。")) return;
+    setBusy("character-edit");
+    setError("");
+    try {
+      await api.deleteCharacter(characterId);
+      if (editingCharId === characterId) resetCharForm();
+      await open(selected.id);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  function startEditOutline(chapterId: string, title: string, outline: string) {
+    setEditingOutlineId(chapterId);
+    setOutlineDraftTitle(title);
+    setOutlineDraftText(outline);
+  }
+
+  function cancelEditOutline() {
+    setEditingOutlineId("");
+    setOutlineDraftTitle("");
+    setOutlineDraftText("");
+  }
+
+  async function saveOutline(chapterId: string) {
+    if (!selected) return;
+    setBusy("outline-edit");
+    setError("");
+    try {
+      await api.updateChapterOutline(chapterId, {
+        title: outlineDraftTitle.trim(),
+        outline: outlineDraftText.trim(),
+      });
+      cancelEditOutline();
+      await open(selected.id);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function extractForeshadows(chapterId: string) {
+    if (!selected) return;
+    setBusy("extract-foreshadow");
+    setError("");
+    setExtractResult(null);
+    setExtractChapterId(chapterId);
+    try {
+      const res = await api.extractChapterForeshadows(chapterId, activeModel());
+      setExtractResult(res);
+      setSelectedCandidateIdx(res.candidates.map((_, idx) => idx));
+    } catch (e) {
+      setError((e as Error).message);
+      setExtractChapterId("");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  function toggleCandidate(idx: number) {
+    setSelectedCandidateIdx((prev) =>
+      prev.includes(idx) ? prev.filter((i) => i !== idx) : [...prev, idx]
+    );
+  }
+
+  function dismissExtract() {
+    setExtractResult(null);
+    setExtractChapterId("");
+    setSelectedCandidateIdx([]);
+  }
+
+  async function registerCandidates() {
+    if (!selected || !extractResult) return;
+    const picks = extractResult.candidates.filter((_, idx) =>
+      selectedCandidateIdx.includes(idx)
+    );
+    if (picks.length === 0) return;
+    setBusy("extract-foreshadow");
+    setError("");
+    try {
+      for (const cand of picks) {
+        await api.createForeshadow(selected.id, {
+          kind: cand.kind || "foreshadow",
+          title: cand.title,
+          description: cand.description,
+          status: "open",
+          introduced_at: cand.introduced_at,
+          payoff: cand.payoff,
+        });
+      }
+      dismissExtract();
       await open(selected.id);
     } catch (e) {
       setError((e as Error).message);
@@ -763,6 +1010,34 @@ export default function Projects({ model }: ProjectsProps) {
     }
   }
 
+  async function runHealthCheck() {
+    if (!selected) return;
+    setBusy("health-check");
+    setError("");
+    try {
+      const result = await api.runHealthCheck(selected.id, activeModel(), 100);
+      setHealthResult(result);
+      // 复用既有的停滞/真相明细面板：填充其状态并预选可应用项。
+      setStallResult(result.stall);
+      setSelectedStallIds(
+        result.stall.suggestions
+          .filter((s) => s.recommended_status && s.recommended_status !== "no_change")
+          .map((s) => s.foreshadow_id)
+      );
+      setTruthCheckResult(result.truth);
+      setSelectedTruthActionKeys(
+        result.truth.maintenance_actions
+          .map((action, index) => ({ action, index }))
+          .filter(({ action }) => canApplyTruthAction(action))
+          .map(({ action, index }) => truthActionKey(action, index))
+      );
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function analyzeReference() {
     if (!selected || referenceText.trim().length < 50) return;
     setBusy("reference");
@@ -832,7 +1107,7 @@ export default function Projects({ model }: ProjectsProps) {
     try {
       await streamSSE(
         `/api/chapters/${chapterId}/generate`,
-        { word_count: 1500, model: activeModel() },
+        { word_count: genWordCount, model: activeModel() },
         {
           onToken: (text) => setChapterText((prev) => prev + text),
           onError: (message) => setError(message),
@@ -1560,13 +1835,75 @@ export default function Projects({ model }: ProjectsProps) {
                 <summary>角色（{selected.characters.length}）</summary>
                 {selected.characters.map((c: CharacterOut) => (
                   <div key={c.id} className="card">
-                    <strong>{c.name}</strong>
-                    <div className="meta">动机：{c.profile.motivation}</div>
-                    <div className="meta">性格：{c.profile.personality}</div>
-                    <div className="meta">关系：{c.profile.relationships}</div>
-                    <div className="meta">弧光：{c.arc}</div>
+                    {editingCharId === c.id ? (
+                      <CharacterEditForm
+                        name={charName}
+                        personality={charPersonality}
+                        motivation={charMotivation}
+                        relationships={charRelationships}
+                        appearance={charAppearance}
+                        arc={charArc}
+                        busy={busy === "character-edit"}
+                        onName={setCharName}
+                        onPersonality={setCharPersonality}
+                        onMotivation={setCharMotivation}
+                        onRelationships={setCharRelationships}
+                        onAppearance={setCharAppearance}
+                        onArc={setCharArc}
+                        onSave={saveChar}
+                        onCancel={resetCharForm}
+                      />
+                    ) : (
+                      <>
+                        <strong>{c.name}</strong>
+                        <div className="meta">动机：{c.profile.motivation}</div>
+                        <div className="meta">性格：{c.profile.personality}</div>
+                        <div className="meta">关系：{c.profile.relationships}</div>
+                        {c.profile.appearance && (
+                          <div className="meta">外貌：{c.profile.appearance}</div>
+                        )}
+                        <div className="meta">弧光：{c.arc}</div>
+                        <div className="card-actions">
+                          <button className="mini secondary" onClick={() => editChar(c)}>
+                            编辑
+                          </button>
+                          <button
+                            className="mini secondary"
+                            disabled={busy === "character-edit"}
+                            onClick={() => deleteChar(c.id)}
+                          >
+                            删除
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </div>
                 ))}
+                {editingCharId === "__new" ? (
+                  <div className="card">
+                    <CharacterEditForm
+                      name={charName}
+                      personality={charPersonality}
+                      motivation={charMotivation}
+                      relationships={charRelationships}
+                      appearance={charAppearance}
+                      arc={charArc}
+                      busy={busy === "character-edit"}
+                      onName={setCharName}
+                      onPersonality={setCharPersonality}
+                      onMotivation={setCharMotivation}
+                      onRelationships={setCharRelationships}
+                      onAppearance={setCharAppearance}
+                      onArc={setCharArc}
+                      onSave={saveChar}
+                      onCancel={resetCharForm}
+                    />
+                  </div>
+                ) : (
+                  <button className="mini" onClick={startNewChar}>
+                    + 新增角色
+                  </button>
+                )}
               </details>
             )}
 
@@ -1698,6 +2035,54 @@ export default function Projects({ model }: ProjectsProps) {
                 <strong>{activeTruthFiles.length}</strong>
                 <small>已完成 {resolvedTruthFiles.length}</small>
               </div>
+            </section>
+
+            <section className="overview-section health-section">
+              <div className="health-head">
+                <h3>长篇一键体检</h3>
+                <button
+                  className="mini"
+                  disabled={busy === "health-check"}
+                  onClick={runHealthCheck}
+                >
+                  {busy === "health-check" ? "体检中…" : "开始体检"}
+                </button>
+              </div>
+              <p className="hint">
+                整合伏笔/支线停滞检测与真相文件一致性检查，给出长篇健康评分；可处理的明细会出现在下方「伏笔与支线」「真相文件」面板中。
+              </p>
+              {healthResult && (
+                <div
+                  className={`health-result grade-${
+                    healthResult.score >= 85
+                      ? "good"
+                      : healthResult.score >= 70
+                      ? "ok"
+                      : healthResult.score >= 50
+                      ? "warn"
+                      : "bad"
+                  }`}
+                >
+                  <div className="health-score">
+                    <strong>{healthResult.score}</strong>
+                    <span>{healthResult.grade}</span>
+                  </div>
+                  <div className="health-detail">
+                    <p>{healthResult.summary}</p>
+                    <div className="health-counts">
+                      <span>需关注 {healthResult.total_issues}</span>
+                      <span>高 {healthResult.high_issues}</span>
+                      <span>中 {healthResult.medium_issues}</span>
+                      <span>低 {healthResult.low_issues}</span>
+                      <span>真相矛盾 {healthResult.truth.issues.length}</span>
+                      <span>
+                        停滞线索{" "}
+                        {healthResult.stall.suggestions.filter((s) => s.action !== "none").length}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
             </section>
 
             <section className="overview-section">
@@ -2670,6 +3055,12 @@ export default function Projects({ model }: ProjectsProps) {
             return (
               <article className="chapter-detail">
                 <header className="chapter-head">
+                  <button
+                    className="back-overview"
+                    onClick={() => setActiveChapter(OVERVIEW_ID)}
+                  >
+                    ← 返回项目总览
+                  </button>
                   <div className="crumbs">
                     {isReference ? `参考资料 · ${vol.title}` : `第 ${vol.order_index + 1} 卷 · ${vol.title}`}
                   </div>
@@ -2698,7 +3089,49 @@ export default function Projects({ model }: ProjectsProps) {
                       </span>
                     )}
                   </div>
-                  <div className="chapter-outline">{isReference ? "说明" : "大纲"}：{ch.outline}</div>
+                  {editingOutlineId === ch.id && !isReference ? (
+                    <div className="outline-edit-form">
+                      <input
+                        value={outlineDraftTitle}
+                        placeholder="章节标题"
+                        onChange={(e) => setOutlineDraftTitle(e.target.value)}
+                      />
+                      <textarea
+                        value={outlineDraftText}
+                        placeholder="章节大纲"
+                        rows={4}
+                        onChange={(e) => setOutlineDraftText(e.target.value)}
+                      />
+                      <div className="card-actions">
+                        <button
+                          className="mini"
+                          disabled={busy === "outline-edit"}
+                          onClick={() => saveOutline(ch.id)}
+                        >
+                          {busy === "outline-edit" ? "保存中…" : "保存大纲"}
+                        </button>
+                        <button
+                          className="mini secondary"
+                          disabled={busy === "outline-edit"}
+                          onClick={cancelEditOutline}
+                        >
+                          取消
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="chapter-outline">
+                      {isReference ? "说明" : "大纲"}：{ch.outline}
+                      {!isReference && (
+                        <button
+                          className="mini secondary outline-edit-btn"
+                          onClick={() => startEditOutline(ch.id, ch.title, ch.outline)}
+                        >
+                          编辑
+                        </button>
+                      )}
+                    </div>
+                  )}
                   <div className="chapter-actions">
                     {!isReference && (
                       <button
@@ -2718,6 +3151,23 @@ export default function Projects({ model }: ProjectsProps) {
                           ? "重写"
                           : "生成本章"}
                       </button>
+                    )}
+                    {!isReference && (
+                      <label className="word-count-field" title="目标字数（200–6000）">
+                        目标字数
+                        <input
+                          type="number"
+                          min={200}
+                          max={6000}
+                          step={100}
+                          value={genWordCount}
+                          disabled={isWriting || writingChapter !== ""}
+                          onChange={(e) => setGenWordCount(Number(e.target.value) || 0)}
+                          onBlur={() =>
+                            setGenWordCount((n) => Math.min(6000, Math.max(200, Math.round((n || 1500) / 100) * 100)))
+                          }
+                        />
+                      </label>
                     )}
                     {drafted && (
                       <>
@@ -2760,6 +3210,15 @@ export default function Projects({ model }: ProjectsProps) {
                                 {isSuggesting ? "分析线索中…" : "线索建议"}
                               </button>
                             )}
+                            <button
+                              className="gen secondary"
+                              disabled={busy === "extract-foreshadow" || writingChapter !== ""}
+                              onClick={() => extractForeshadows(ch.id)}
+                            >
+                              {busy === "extract-foreshadow" && extractChapterId === ch.id
+                                ? "抽取伏笔中…"
+                                : "登记本章伏笔"}
+                            </button>
                           </>
                         )}
                         <button
@@ -2790,14 +3249,74 @@ export default function Projects({ model }: ProjectsProps) {
                       </button>
                     )}
                   </div>
+
+                  {extractChapterId === ch.id && extractResult && (
+                    <div className="extract-panel">
+                      <div className="extract-head">
+                        <strong>本章伏笔/支线候选（{extractResult.candidates.length}）</strong>
+                        <button className="mini secondary" onClick={dismissExtract}>
+                          关闭
+                        </button>
+                      </div>
+                      {extractResult.candidates.length === 0 ? (
+                        <div className="hint">本章未识别到值得长期追踪的线索。</div>
+                      ) : (
+                        <>
+                          {extractResult.candidates.map((cand, idx) => (
+                            <label key={idx} className="extract-item">
+                              <input
+                                type="checkbox"
+                                checked={selectedCandidateIdx.includes(idx)}
+                                onChange={() => toggleCandidate(idx)}
+                              />
+                              <div>
+                                <div className="extract-title">
+                                  <span className="badge">{cand.kind}</span>
+                                  {cand.title}
+                                </div>
+                                {cand.description && (
+                                  <div className="meta">{cand.description}</div>
+                                )}
+                                {cand.introduced_at && (
+                                  <div className="meta">出现：{cand.introduced_at}</div>
+                                )}
+                                {cand.payoff && (
+                                  <div className="meta">建议回收：{cand.payoff}</div>
+                                )}
+                                {cand.evidence && (
+                                  <div className="meta evidence">依据：{cand.evidence}</div>
+                                )}
+                              </div>
+                            </label>
+                          ))}
+                          <div className="card-actions">
+                            <button
+                              className="mini"
+                              disabled={
+                                busy === "extract-foreshadow" || selectedCandidateIdx.length === 0
+                              }
+                              onClick={registerCandidates}
+                            >
+                              {busy === "extract-foreshadow"
+                                ? "登记中…"
+                                : `登记所选（${selectedCandidateIdx.length}）`}
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </header>
 
                 {!isReference && (
                   <section className="context-preview">
                     <div className="context-preview-head">
                       <div>
-                        <h3>续写上下文预览</h3>
-                        <p>生成本章前，系统会优先参考这些资料来源。</p>
+                        <h3>续写上下文预览（只读）</h3>
+                        <p>
+                          这里展示生成本章时系统会自动注入的资料，仅供核对，不能直接在此编辑。
+                          如需调整，请到左侧的角色卡、设定、伏笔/支线、真相档案等面板修改。
+                        </p>
                       </div>
                       <button
                         className="mini secondary"

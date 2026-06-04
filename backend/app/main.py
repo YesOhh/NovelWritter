@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.foreshadows import router as foreshadows_router
 from app.api.generate import router as generate_router
+from app.api.health import router as health_router
 from app.api.projects import router as projects_router
 from app.api.reference import router as reference_router
 from app.api.settings import router as settings_router
@@ -35,6 +36,7 @@ app.include_router(settings_router)
 app.include_router(foreshadows_router)
 app.include_router(reference_router)
 app.include_router(truth_files_router)
+app.include_router(health_router)
 
 
 @app.get("/health")

@@ -282,6 +282,22 @@ button.gen.secondary {
   border: 1px solid #cbd2d9;
 }
 
+.word-count-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #52606d;
+}
+
+.word-count-field input {
+  width: 74px;
+  padding: 5px 8px;
+  border: 1px solid #cbd2d9;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
 .badge.review.sev-none {
   background: #d3f9e0;
   color: #1f7a4d;
@@ -831,6 +847,85 @@ button.mini.danger {
   padding: 8px;
 }
 
+.card-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+.char-edit-form,
+.outline-edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.char-edit-form input,
+.char-edit-form textarea,
+.outline-edit-form input,
+.outline-edit-form textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 12px;
+  padding: 5px 7px;
+  border: 1px solid #d6dbe1;
+  border-radius: 6px;
+  resize: vertical;
+}
+
+.outline-edit-form {
+  margin-top: 6px;
+}
+
+.outline-edit-btn {
+  margin-left: 8px;
+}
+
+.extract-panel {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid #d9e2ec;
+  border-radius: 8px;
+  background: #f7f9fc;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.extract-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.extract-item {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 8px;
+  background: #fff;
+  border: 1px solid #e3e8ee;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.extract-item input {
+  margin-top: 3px;
+}
+
+.extract-title {
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.extract-item .meta.evidence {
+  color: #7b8794;
+  font-style: italic;
+}
+
 .nav-vol {
   margin-top: 14px;
 }
@@ -1245,6 +1340,94 @@ button.mini.danger {
   color: #627d98;
   font-size: 12px;
   line-height: 1.5;
+}
+
+.health-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.health-head h3 {
+  margin: 0;
+}
+
+.health-result {
+  display: flex;
+  align-items: stretch;
+  gap: 14px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #e3e8ee;
+  border-left-width: 4px;
+  border-radius: 8px;
+  background: #fafbfc;
+}
+
+.health-result.grade-good {
+  border-left-color: #2f9e44;
+}
+
+.health-result.grade-ok {
+  border-left-color: #1971c2;
+}
+
+.health-result.grade-warn {
+  border-left-color: #e8590c;
+}
+
+.health-result.grade-bad {
+  border-left-color: #e03131;
+}
+
+.health-score {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 74px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: #f1f3f5;
+}
+
+.health-score strong {
+  font-size: 30px;
+  line-height: 1;
+  color: #1f2933;
+}
+
+.health-score span {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #627d98;
+}
+
+.health-detail {
+  flex: 1 1 auto;
+}
+
+.health-detail p {
+  margin: 0 0 8px;
+  color: #1f2933;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.health-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.health-counts span {
+  font-size: 12px;
+  color: #486581;
+  background: #eef2f6;
+  border-radius: 999px;
+  padding: 2px 10px;
 }
 
 .truth-check-panel {
@@ -2154,6 +2337,23 @@ button.mini.danger {
   border-bottom: 1px solid #eef1f5;
   padding-bottom: 12px;
   margin-bottom: 16px;
+}
+
+.back-overview {
+  display: inline-flex;
+  align-items: center;
+  margin-bottom: 10px;
+  padding: 5px 12px;
+  font-size: 13px;
+  color: #486581;
+  background: #f0f4f8;
+  border: 1px solid #d9e2ec;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.back-overview:hover {
+  background: #e1e8f0;
 }
 
 .chapter-head .crumbs {

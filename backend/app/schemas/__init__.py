@@ -170,6 +170,23 @@ class CharacterOut(BaseModel):
     arc: str
 
 
+class CharacterCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    profile: dict = Field(default_factory=dict)
+    arc: str = ""
+
+
+class CharacterUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    profile: dict | None = None
+    arc: str | None = None
+
+
+class ChapterOutlineUpdate(BaseModel):
+    title: str | None = Field(default=None, max_length=200)
+    outline: str | None = None
+
+
 class WorldSettingCreate(BaseModel):
     category: str = ""
     key: str = Field(..., min_length=1, max_length=200)
@@ -352,6 +369,42 @@ class TrackingBatchStatusItem(BaseModel):
 
 class TrackingBatchStatusRequest(BaseModel):
     items: list[TrackingBatchStatusItem] = []
+
+
+class ForeshadowExtractRequest(BaseModel):
+    model: str | None = None
+
+
+class ForeshadowCandidate(BaseModel):
+    kind: str = "foreshadow"  # foreshadow | subplot | resource | relationship
+    title: str = ""
+    description: str = ""
+    introduced_at: str = ""
+    payoff: str = ""
+    evidence: str = ""
+
+
+class ForeshadowExtractResult(BaseModel):
+    chapter_id: str = ""
+    chapter_title: str = ""
+    candidates: list[ForeshadowCandidate] = []
+
+
+class ProjectHealthRequest(BaseModel):
+    model: str | None = None
+    max_chapters: int = Field(default=80, ge=1, le=160)
+
+
+class ProjectHealthResult(BaseModel):
+    score: int = Field(default=100, ge=0, le=100)
+    grade: str = ""  # 优秀 | 良好 | 需关注 | 偏弱
+    summary: str = ""
+    total_issues: int = 0
+    high_issues: int = 0
+    medium_issues: int = 0
+    low_issues: int = 0
+    stall: TrackingStallResult = Field(default_factory=TrackingStallResult)
+    truth: TruthFileCheckResult = Field(default_factory=TruthFileCheckResult)
 
 
 class StyleFingerprint(BaseModel):

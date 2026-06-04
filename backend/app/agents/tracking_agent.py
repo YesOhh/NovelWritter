@@ -1,6 +1,6 @@
 """伏笔/支线追踪 Agent：根据章节正文给出追踪项状态建议。"""
 from app.llm.claude_client import complete_json
-from app.schemas import TrackingSuggestionResult, TrackingStallResult
+from app.schemas import TrackingSuggestionResult, TrackingStallResult, ForeshadowExtractResult
 
 TRACKING_SYSTEM_PROMPT = """你是一位长篇小说连续性编辑，负责判断伏笔、支线、资源线、情感线是否在当前章节中被推进或回收。
 
@@ -210,3 +210,77 @@ async def scan_stalled_threads(
     result.checked_chapters = checked_chapters
     result.total_chapters = total_chapters
     return result
+
+
+EXTRACT_SYSTEM_PROMPT = """你是一位长篇小说连续性编辑，负责从单章正文中“识别值得长期追踪的伏笔、支线、资源线、情感线”，方便作者登记到追踪表里。
+
+要求：
+- 只抽取本章正文里真实出现、且需要在后续章节回收或推进的线索；不要抽取已经在本章内闭环、无后续价值的普通情节。
+- kind 用 foreshadow（伏笔/悬念）/ subplot（支线剧情）/ resource（资源线，如道具、能力、人脉）/ relationship（情感/关系线）。
+- title 用简短可检索的名字（如“神秘黑袍人”“父亲的旧怀表”），不要写成整句。
+- description 一句话说明这条线索是什么、埋了什么钩子。
+- introduced_at 填写它在本章出现的位置线索（如“本章开头集市”），便于日后定位。
+- payoff 给出建议的回收/推进方向（若正文已暗示）。
+- evidence 引用本章里的具体文字或情节作为依据。
+- 宁缺毋滥：一章通常 0-5 条。没有值得追踪的线索时返回空数组。"""
+
+_EXTRACT_TOOL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "candidates": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "enum": ["foreshadow", "subplot", "resource", "relationship"],
+                        "description": "线索类型",
+                    },
+                    "title": {"type": "string", "description": "简短可检索标题"},
+                    "description": {"type": "string", "description": "线索说明"},
+                    "introduced_at": {"type": "string", "description": "本章出现位置"},
+                    "payoff": {"type": "string", "description": "建议回收/推进方向"},
+                    "evidence": {"type": "string", "description": "本章依据"},
+                },
+                "required": ["kind", "title", "description", "evidence"],
+            },
+        }
+    },
+    "required": ["candidates"],
+}
+
+
+async def extract_foreshadows_from_chapter(
+    content: str,
+    chapter_title: str,
+    chapter_outline: str,
+    existing_titles: list[str] | None = None,
+    model: str | None = None,
+) -> ForeshadowExtractResult:
+    if not content or not content.strip():
+        return ForeshadowExtractResult(candidates=[])
+
+    existing = "、".join(existing_titles or []) or "（暂无）"
+    prompt = f"""【本章标题】
+{chapter_title or "（未命名章节）"}
+
+【本章大纲】
+{chapter_outline or "（未提供）"}
+
+【已登记的追踪项标题】（请避免重复抽取这些线索）
+{existing}
+
+【本章正文】
+{content}
+
+请从本章正文中识别值得长期追踪的伏笔/支线/资源线/情感线，调用 save_foreshadow_candidates 返回。没有则返回空数组。"""
+    data = await complete_json(
+        system=EXTRACT_SYSTEM_PROMPT,
+        prompt=prompt,
+        tool_name="save_foreshadow_candidates",
+        tool_schema=_EXTRACT_TOOL_SCHEMA,
+        max_tokens=2500,
+        model=model,
+    )
+    return ForeshadowExtractResult.model_validate(data)

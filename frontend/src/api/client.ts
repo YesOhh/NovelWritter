@@ -147,6 +147,33 @@ export interface TrackingStallResult {
   suggestions: TrackingStallSuggestion[];
 }
 
+export interface ForeshadowCandidate {
+  kind: string;
+  title: string;
+  description: string;
+  introduced_at: string;
+  payoff: string;
+  evidence: string;
+}
+
+export interface ForeshadowExtractResult {
+  chapter_id: string;
+  chapter_title: string;
+  candidates: ForeshadowCandidate[];
+}
+
+export interface ProjectHealthResult {
+  score: number;
+  grade: string;
+  summary: string;
+  total_issues: number;
+  high_issues: number;
+  medium_issues: number;
+  low_issues: number;
+  stall: TrackingStallResult;
+  truth: TruthFileCheckResult;
+}
+
 export interface StyleFingerprint {
   summary: string;
   narrative_pov: string;
@@ -418,6 +445,32 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ count, model }),
     }),
+  createCharacter: (
+    id: string,
+    body: { name: string; profile?: CharacterOut["profile"]; arc?: string }
+  ) =>
+    req<CharacterOut>(`/api/projects/${id}/characters`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  updateCharacter: (
+    characterId: string,
+    body: { name?: string; profile?: CharacterOut["profile"]; arc?: string }
+  ) =>
+    req<CharacterOut>(`/api/projects/characters/${characterId}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  deleteCharacter: (characterId: string) =>
+    req<void>(`/api/projects/characters/${characterId}`, { method: "DELETE" }),
+  updateChapterOutline: (
+    chapterId: string,
+    body: { title?: string; outline?: string }
+  ) =>
+    req<VolumeOut>(`/api/projects/chapters/${chapterId}/outline`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
   generateOutline: (
     id: string,
     volume_count: number,
@@ -480,6 +533,11 @@ export const api = {
     }),
   deleteForeshadow: (foreshadowId: string) =>
     req<void>(`/api/foreshadows/${foreshadowId}`, { method: "DELETE" }),
+  extractChapterForeshadows: (chapterId: string, model?: string) =>
+    req<ForeshadowExtractResult>(`/api/chapters/${chapterId}/foreshadows/extract`, {
+      method: "POST",
+      body: JSON.stringify({ model }),
+    }),
   createTruthFile: (
     projectId: string,
     body: {
@@ -539,6 +597,11 @@ export const api = {
     req<ForeshadowOut[]>(`/api/projects/${projectId}/tracking/batch-status`, {
       method: "POST",
       body: JSON.stringify({ items }),
+    }),
+  runHealthCheck: (projectId: string, model?: string, max_chapters = 80) =>
+    req<ProjectHealthResult>(`/api/projects/${projectId}/health-check`, {
+      method: "POST",
+      body: JSON.stringify({ model, max_chapters }),
     }),
   analyzeReference: (projectId: string, text: string, apply = true, model?: string) =>
     req<ReferenceAnalyzeResult>(`/api/projects/${projectId}/reference/analyze`, {

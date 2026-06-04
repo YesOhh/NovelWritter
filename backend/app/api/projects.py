@@ -17,10 +17,13 @@ from app.agents.style_stats import style_text_from_guide
 from app.db import get_session
 from app.llm.model_resolver import resolve_project_model
 from app.memory.retriever import index_chunk
-from app.models import Chapter, Character, Foreshadow, Project, TruthFile, Volume
+from app.models import Chapter, Character, Foreshadow, MemoryChunk, Project, TruthFile, Volume
 from app.schemas import (
+    CharacterCreate,
     CharacterGenerateRequest,
     CharacterOut,
+    CharacterUpdate,
+    ChapterOutlineUpdate,
     OutlineFillRequest,
     OutlineGenerateRequest,
     ProjectContinuationAnchorUpdate,
@@ -702,6 +705,131 @@ async def generate_project_characters(
         )
     await session.commit()
     return created
+
+
+def _character_chunk_text(c: Character) -> str:
+    p = c.profile or {}
+    return (
+        f"角色 {c.name}：{p.get('personality', '')} 动机:{p.get('motivation', '')} "
+        f"关系:{p.get('relationships', '')} 弧光:{c.arc}"
+    )
+
+
+async def _sync_character_chunk(session: AsyncSession, c: Character) -> None:
+    chunk_res = await session.execute(
+        select(MemoryChunk).where(
+            MemoryChunk.source_type == "character",
+            MemoryChunk.source_id == c.id,
+        )
+    )
+    chunk = chunk_res.scalar_one_or_none()
+    if chunk is None:
+        await index_chunk(
+            session,
+            project_id=c.project_id,
+            source_type="character",
+            source_id=c.id,
+            text=_character_chunk_text(c),
+            keywords=[c.name],
+        )
+    else:
+        chunk.text = _character_chunk_text(c)
+        chunk.keywords = [c.name]
+
+
+@router.post("/{project_id}/characters", response_model=CharacterOut, status_code=201)
+async def create_project_character(
+    project_id: str,
+    body: CharacterCreate,
+    session: AsyncSession = Depends(get_session),
+) -> Character:
+    """手动新增角色卡，并同步检索片段。"""
+    project = await _get_project_or_404(session, project_id)
+    character = Character(
+        project_id=project.id,
+        name=body.name,
+        profile=body.profile or {},
+        arc=body.arc,
+    )
+    session.add(character)
+    await session.flush()
+    await _sync_character_chunk(session, character)
+    await session.commit()
+    await session.refresh(character)
+    return character
+
+
+@router.put("/characters/{character_id}", response_model=CharacterOut)
+async def update_project_character(
+    character_id: str,
+    body: CharacterUpdate,
+    session: AsyncSession = Depends(get_session),
+) -> Character:
+    """人工编辑角色卡（名称/档案/弧光），并同步检索片段。"""
+    character = await session.get(Character, character_id)
+    if character is None:
+        raise HTTPException(status_code=404, detail="角色不存在")
+    data = body.model_dump(exclude_none=True)
+    if "name" in data:
+        character.name = data["name"]
+    if "arc" in data:
+        character.arc = data["arc"]
+    if "profile" in data:
+        merged = dict(character.profile or {})
+        merged.update(data["profile"] or {})
+        character.profile = merged
+    await _sync_character_chunk(session, character)
+    await session.commit()
+    await session.refresh(character)
+    return character
+
+
+@router.delete("/characters/{character_id}", status_code=204)
+async def delete_project_character(
+    character_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """删除角色卡及其检索片段。"""
+    character = await session.get(Character, character_id)
+    if character is None:
+        raise HTTPException(status_code=404, detail="角色不存在")
+    chunk_res = await session.execute(
+        select(MemoryChunk).where(
+            MemoryChunk.source_type == "character",
+            MemoryChunk.source_id == character.id,
+        )
+    )
+    for chunk in chunk_res.scalars().all():
+        await session.delete(chunk)
+    await session.delete(character)
+    await session.commit()
+
+
+@router.put("/chapters/{chapter_id}/outline", response_model=VolumeOut)
+async def update_chapter_outline(
+    chapter_id: str,
+    body: ChapterOutlineUpdate,
+    session: AsyncSession = Depends(get_session),
+) -> Volume:
+    """人工编辑章节标题/大纲（不改正文），返回所属卷的最新结构。"""
+    chapter = await session.get(Chapter, chapter_id)
+    if chapter is None:
+        raise HTTPException(status_code=404, detail="章节不存在")
+    data = body.model_dump(exclude_none=True)
+    if "title" in data:
+        chapter.title = data["title"]
+    if "outline" in data:
+        chapter.outline = data["outline"]
+    await session.commit()
+    volume = await session.execute(
+        select(Volume)
+        .where(Volume.id == chapter.volume_id)
+        .options(
+            selectinload(Volume.chapters).selectinload(Chapter.reviews),
+            selectinload(Volume.chapters).selectinload(Chapter.summary_row),
+        )
+    )
+    return volume.scalar_one()
 
 
 @router.post("/{project_id}/outline/generate", response_model=list[VolumeOut])
