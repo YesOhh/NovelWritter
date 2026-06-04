@@ -319,6 +319,41 @@ class TrackingSuggestionResult(BaseModel):
     suggestions: list[TrackingSuggestion] = []
 
 
+class TrackingStallRequest(BaseModel):
+    model: str | None = None
+    max_chapters: int = Field(default=60, ge=1, le=160)
+
+
+class TrackingStallSuggestion(BaseModel):
+    foreshadow_id: str = ""
+    title: str = ""
+    kind: str = "foreshadow"
+    current_status: str = "open"
+    silent_chapters: int = 0
+    last_seen: str = ""
+    risk: str = "medium"  # high | medium | low
+    action: str = "remind"  # remind | advance | resolve | drop | none
+    recommended_status: str = "no_change"  # no_change | open | progressing | resolved
+    evidence: str = ""
+    suggestion: str = ""
+
+
+class TrackingStallResult(BaseModel):
+    checked_threads: int = 0
+    checked_chapters: int = 0
+    total_chapters: int = 0
+    suggestions: list[TrackingStallSuggestion] = []
+
+
+class TrackingBatchStatusItem(BaseModel):
+    foreshadow_id: str
+    status: str  # open | progressing | resolved
+
+
+class TrackingBatchStatusRequest(BaseModel):
+    items: list[TrackingBatchStatusItem] = []
+
+
 class StyleFingerprint(BaseModel):
     summary: str = ""
     narrative_pov: str = ""

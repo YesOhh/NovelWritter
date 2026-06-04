@@ -11,7 +11,7 @@ _CLAUDE_SETTINGS_FILE = _REPO_ROOT / ".claude" / "settings.json"
 
 
 def _load_claude_settings_env() -> dict[str, str]:
-    """读取 Claude/Agent Maestro 本地配置作为开发期 fallback。"""
+    """读取本地 Anthropic 兼容代理配置（.claude/settings.json）作为开发期 fallback。"""
     if _ENV_FILE.exists() or not _CLAUDE_SETTINGS_FILE.exists():
         return {}
     try:

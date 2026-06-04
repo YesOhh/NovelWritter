@@ -25,7 +25,7 @@ pip install -r requirements.txt
 # 配置 API Key
 Copy-Item .env.example .env
 # 编辑 .env：填入 ANTHROPIC_API_KEY；如需走本地/自定义代理，设置 ANTHROPIC_BASE_URL
-# 开发环境也支持直接读取仓库根目录 .claude/settings.json 的 Agent Maestro 配置
+# 开发环境也支持直接读取仓库根目录 .claude/settings.json 的本地代理配置
 
 uvicorn app.main:app --reload --port 8000
 ```

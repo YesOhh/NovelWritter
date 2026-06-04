@@ -13,6 +13,8 @@ import {
   type TruthMaintenanceAction,
   type TruthMaintenanceLogEntry,
   type TrackingSuggestion,
+  type TrackingStallResult,
+  type TrackingStallSuggestion,
   type ReferenceAnalyzeResult,
   type ReferenceChapterImportResult,
   type ReferenceConflictItem,
@@ -203,6 +205,8 @@ export default function Projects({ model }: ProjectsProps) {
   const [editingTruthId, setEditingTruthId] = useState<string>("");
   const [truthCheckResult, setTruthCheckResult] = useState<TruthFileCheckResult | null>(null);
   const [selectedTruthActionKeys, setSelectedTruthActionKeys] = useState<string[]>([]);
+  const [stallResult, setStallResult] = useState<TrackingStallResult | null>(null);
+  const [selectedStallIds, setSelectedStallIds] = useState<string[]>([]);
   const [referenceText, setReferenceText] = useState("");
   const [referenceFileName, setReferenceFileName] = useState("");
   const [referenceApply, setReferenceApply] = useState(true);
@@ -276,6 +280,11 @@ export default function Projects({ model }: ProjectsProps) {
   async function open(id: string) {
     setError("");
     try {
+      if (selected && selected.id !== id) {
+        setStallResult(null);
+        setSelectedStallIds([]);
+        setTruthCheckResult(null);
+      }
       const detail = await api.getProject(id);
       setSelected(detail);
       // 默认进入项目总览；用户选择章节后保持当前章节。
@@ -696,6 +705,64 @@ export default function Projects({ model }: ProjectsProps) {
     }
   }
 
+  async function scanTrackingStall() {
+    if (!selected) return;
+    setBusy("stall-scan");
+    setError("");
+    try {
+      const result = await api.scanTrackingStall(selected.id, activeModel(), 100);
+      setStallResult(result);
+      setSelectedStallIds(
+        result.suggestions
+          .filter((s) => s.recommended_status && s.recommended_status !== "no_change")
+          .map((s) => s.foreshadow_id)
+      );
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  function toggleStallSelection(foreshadowId: string) {
+    setSelectedStallIds((ids) =>
+      ids.includes(foreshadowId) ? ids.filter((id) => id !== foreshadowId) : [...ids, foreshadowId]
+    );
+  }
+
+  function canApplyStall(s: TrackingStallSuggestion): boolean {
+    return Boolean(s.recommended_status) && s.recommended_status !== "no_change"
+      && s.recommended_status !== s.current_status;
+  }
+
+  function setAllStallSelections(selectedAll: boolean) {
+    if (!stallResult) return;
+    setSelectedStallIds(
+      selectedAll ? stallResult.suggestions.filter(canApplyStall).map((s) => s.foreshadow_id) : []
+    );
+  }
+
+  async function applyStallSuggestions(suggestions: TrackingStallSuggestion[]) {
+    if (!selected) return;
+    const applicable = suggestions.filter(canApplyStall);
+    if (applicable.length === 0) return;
+    setBusy("stall-apply");
+    setError("");
+    try {
+      await api.batchTrackingStatus(
+        selected.id,
+        applicable.map((s) => ({ foreshadow_id: s.foreshadow_id, status: s.recommended_status }))
+      );
+      setStallResult(null);
+      setSelectedStallIds([]);
+      await open(selected.id);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function analyzeReference() {
     if (!selected || referenceText.trim().length < 50) return;
     setBusy("reference");
@@ -1081,6 +1148,18 @@ export default function Projects({ model }: ProjectsProps) {
         medium: "中风险",
         low: "低风险",
       }[severity] ?? severity
+    );
+  }
+
+  function trackingActionLabel(action: string): string {
+    return (
+      {
+        remind: "找机会提及",
+        advance: "安排推进",
+        resolve: "该回收了",
+        drop: "建议删除/合并",
+        none: "无需处理",
+      }[action] ?? action
     );
   }
 
@@ -2197,6 +2276,112 @@ export default function Projects({ model }: ProjectsProps) {
 
             <section className="overview-section">
               <h3>伏笔与支线</h3>
+              {trackingItems.length > 0 && (
+                <div className="truth-check-panel">
+                  <div className="truth-check-head">
+                    <div>
+                      <strong>自动停滞检测</strong>
+                      <span>结合正文卷章扫描长期未推进的伏笔/支线，给出风险与状态建议。</span>
+                    </div>
+                    <button
+                      className="gen secondary"
+                      disabled={busy !== ""}
+                      onClick={scanTrackingStall}
+                    >
+                      {busy === "stall-scan" ? "扫描中…" : "扫描停滞线索"}
+                    </button>
+                  </div>
+                  {stallResult && (
+                    <div className="truth-check-result">
+                      <div className="reference-counts">
+                        <span>线索 {stallResult.checked_threads}</span>
+                        <span>章节 {stallResult.checked_chapters}/{stallResult.total_chapters}</span>
+                        <span>建议 {stallResult.suggestions.length}</span>
+                      </div>
+                      {stallResult.suggestions.length === 0 ? (
+                        <div className="hint">未发现明显停滞的线索。</div>
+                      ) : (
+                        <div className="truth-maintenance-list">
+                          {(() => {
+                            const applicable = stallResult.suggestions.filter(canApplyStall);
+                            const selected = stallResult.suggestions.filter(
+                              (s) => canApplyStall(s) && selectedStallIds.includes(s.foreshadow_id)
+                            );
+                            const allSelected = applicable.length > 0 && selected.length === applicable.length;
+                            return (
+                              <>
+                                <div className="truth-maintenance-head">
+                                  <strong>停滞建议</strong>
+                                  {applicable.length > 0 && (
+                                    <div className="truth-batch-actions">
+                                      <label>
+                                        <input
+                                          type="checkbox"
+                                          checked={allSelected}
+                                          onChange={(e) => setAllStallSelections(e.target.checked)}
+                                        />
+                                        全选可应用
+                                      </label>
+                                      <button
+                                        className="mini secondary"
+                                        disabled={busy === "stall-apply" || selected.length === 0}
+                                        onClick={() => applyStallSuggestions(selected)}
+                                      >
+                                        {busy === "stall-apply" ? "应用中…" : `应用已选 ${selected.length}`}
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+                                {stallResult.suggestions.map((s) => {
+                                  const canApply = canApplyStall(s);
+                                  return (
+                                    <article key={s.foreshadow_id} className={`truth-maintenance-card sev-${s.risk}`}>
+                                      <div className="thread-card-title">
+                                        <div className="truth-maintenance-title">
+                                          {canApply && (
+                                            <input
+                                              type="checkbox"
+                                              checked={selectedStallIds.includes(s.foreshadow_id)}
+                                              onChange={() => toggleStallSelection(s.foreshadow_id)}
+                                              title="加入批量应用"
+                                            />
+                                          )}
+                                          <strong>{s.title}</strong>
+                                        </div>
+                                        <span>{severityLabel(s.risk)}</span>
+                                      </div>
+                                      <div className="meta">
+                                        {kindLabel(s.kind)} · {statusLabel(s.current_status)}
+                                        {" · "}沉默 {s.silent_chapters} 章
+                                        {s.last_seen ? ` · 最后：${s.last_seen}` : ""}
+                                        {" · "}{trackingActionLabel(s.action)}
+                                      </div>
+                                      {s.evidence && <p>证据：{s.evidence}</p>}
+                                      {s.suggestion && <p>建议：{s.suggestion}</p>}
+                                      {canApply && (
+                                        <div className="truth-card-actions">
+                                          <span className="meta">建议状态：{statusLabel(s.recommended_status)}</span>
+                                          <button
+                                            className="mini secondary"
+                                            disabled={busy === "stall-apply"}
+                                            onClick={() => applyStallSuggestions([s])}
+                                          >
+                                            {busy === "stall-apply" ? "应用中…" : "应用状态"}
+                                          </button>
+                                        </div>
+                                      )}
+                                    </article>
+                                  );
+                                })}
+                              </>
+                            );
+                          })()}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
               {trackingItems.length === 0 ? (
                 <div className="hint">还没有登记伏笔、支线或资源线。</div>
               ) : (

@@ -126,6 +126,27 @@ export interface TrackingSuggestionResult {
   suggestions: TrackingSuggestion[];
 }
 
+export interface TrackingStallSuggestion {
+  foreshadow_id: string;
+  title: string;
+  kind: string;
+  current_status: string;
+  silent_chapters: number;
+  last_seen: string;
+  risk: string;
+  action: string;
+  recommended_status: string;
+  evidence: string;
+  suggestion: string;
+}
+
+export interface TrackingStallResult {
+  checked_threads: number;
+  checked_chapters: number;
+  total_chapters: number;
+  suggestions: TrackingStallSuggestion[];
+}
+
 export interface StyleFingerprint {
   summary: string;
   narrative_pov: string;
@@ -505,6 +526,19 @@ export const api = {
     req<TrackingSuggestionResult>(`/api/chapters/${chapterId}/tracking/suggest`, {
       method: "POST",
       body: JSON.stringify({ model }),
+    }),
+  scanTrackingStall: (projectId: string, model?: string, max_chapters = 80) =>
+    req<TrackingStallResult>(`/api/projects/${projectId}/tracking/stall-scan`, {
+      method: "POST",
+      body: JSON.stringify({ model, max_chapters }),
+    }),
+  batchTrackingStatus: (
+    projectId: string,
+    items: Array<{ foreshadow_id: string; status: string }>
+  ) =>
+    req<ForeshadowOut[]>(`/api/projects/${projectId}/tracking/batch-status`, {
+      method: "POST",
+      body: JSON.stringify({ items }),
     }),
   analyzeReference: (projectId: string, text: string, apply = true, model?: string) =>
     req<ReferenceAnalyzeResult>(`/api/projects/${projectId}/reference/analyze`, {
