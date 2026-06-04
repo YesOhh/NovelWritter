@@ -187,6 +187,11 @@ class ChapterOutlineUpdate(BaseModel):
     outline: str | None = None
 
 
+class VolumeOutlineUpdate(BaseModel):
+    title: str | None = Field(default=None, max_length=200)
+    outline: str | None = None
+
+
 class WorldSettingCreate(BaseModel):
     category: str = ""
     key: str = Field(..., min_length=1, max_length=200)
@@ -472,7 +477,10 @@ class ReferenceForeshadowItem(BaseModel):
 
 class ReferenceAnalyzeRequest(BaseModel):
     text: str = Field(..., min_length=50, max_length=60000)
-    apply: bool = True
+    # 是否把抽取到的文风指纹/统计/样例写入项目（学习文风，默认开）。
+    apply_style: bool = True
+    # 是否把抽取到的设定/角色/伏笔写入项目当成本书正典（会照搬参考书内容，默认关）。
+    apply_resources: bool = False
     model: str | None = None
 
 
@@ -483,6 +491,18 @@ class ReferenceConflictItem(BaseModel):
     incoming: str = ""
     existing: str = ""
     detail: str = ""
+
+
+class ReferenceSourceItem(BaseModel):
+    id: str = ""
+    label: str = ""
+    text: str = ""
+    char_count: int = 0
+    created_at: str = ""
+
+
+class ReferenceSourceRenameRequest(BaseModel):
+    label: str = Field(default="", max_length=120)
 
 
 class ReferenceAnalyzeResult(BaseModel):
@@ -529,6 +549,25 @@ class ProjectDetail(ProjectOut):
     settings: list[WorldSettingOut] = []
     foreshadows: list[ForeshadowOut] = []
     truth_files: list[TruthFileOut] = []
+
+
+# ---------- OCR 图片识别 ----------
+
+
+class OcrImageItem(BaseModel):
+    media_type: str = Field(..., max_length=64)
+    data: str = Field(..., min_length=1, description="图片的 base64 编码（不含 data URL 前缀）")
+
+
+class OcrRequest(BaseModel):
+    images: list[OcrImageItem] = Field(..., min_length=1, max_length=20)
+    instruction: str = Field(default="", max_length=2000)
+    model: str | None = None
+
+
+class OcrResult(BaseModel):
+    text: str = ""
+    image_count: int = 0
 
 
 # ---------- Agent 生成请求/结果 ----------

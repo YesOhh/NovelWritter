@@ -38,6 +38,45 @@ async def stream_completion(
             yield text
 
 
+async def ocr_images(
+    images: list[dict],
+    instruction: str = "",
+    max_tokens: int = 8192,
+    model: str | None = None,
+) -> str:
+    """调用 Claude 视觉能力，将一张或多张图片识别为文本并按顺序拼接。
+
+    images: [{"media_type": "image/png", "data": "<base64>"}...]
+    """
+    system = (
+        "你是高精度 OCR 助手。请逐字转写图片中的所有可见文字，保持原有段落与换行，"
+        "不要翻译、不要润色、不要补充解释或评论。只输出识别到的正文文本。"
+        "若图片中没有文字，输出空字符串。"
+    )
+    user_text = instruction.strip() or "请把下面图片中的文字按阅读顺序完整转写出来。"
+    content: list[dict] = [{"type": "text", "text": user_text}]
+    for img in images:
+        content.append(
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": img["media_type"],
+                    "data": img["data"],
+                },
+            }
+        )
+    resp = await _client.messages.create(
+        model=model or settings.claude_model,
+        max_tokens=max_tokens,
+        temperature=0,
+        system=system,
+        messages=[{"role": "user", "content": content}],
+    )
+    parts = [block.text for block in resp.content if getattr(block, "type", "") == "text"]
+    return "".join(parts).strip()
+
+
 async def complete_json(
     system: str,
     prompt: str,

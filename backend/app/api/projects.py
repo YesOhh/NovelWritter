@@ -17,7 +17,7 @@ from app.agents.style_stats import style_text_from_guide
 from app.db import get_session
 from app.llm.model_resolver import resolve_project_model
 from app.memory.retriever import index_chunk
-from app.models import Chapter, Character, Foreshadow, MemoryChunk, Project, TruthFile, Volume
+from app.models import Chapter, Character, EntityState, Foreshadow, MemoryChunk, Project, TruthFile, Volume
 from app.schemas import (
     CharacterCreate,
     CharacterGenerateRequest,
@@ -32,6 +32,7 @@ from app.schemas import (
     ProjectModelUpdate,
     ProjectOut,
     VolumeOut,
+    VolumeOutlineUpdate,
 )
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
@@ -261,6 +262,23 @@ def _chapter_context(chapters: list[Chapter]) -> str:
     lines: list[str] = []
     for chapter in sorted(chapters, key=lambda ch: ch.order_index):
         lines.append(f"第 {chapter.order_index + 1} 章：{chapter.title}。章纲：{chapter.outline}")
+    return "\n".join(lines)
+
+
+def _characters_context(characters: list[Character]) -> str:
+    lines: list[str] = []
+    for character in sorted(characters, key=lambda c: c.name):
+        profile = character.profile or {}
+        parts = [f"姓名：{character.name}"]
+        if profile.get("personality"):
+            parts.append(f"性格：{profile['personality']}")
+        if profile.get("motivation"):
+            parts.append(f"动机：{profile['motivation']}")
+        if profile.get("relationships"):
+            parts.append(f"关系：{profile['relationships']}")
+        if character.arc:
+            parts.append(f"弧光：{character.arc}")
+        lines.append(f"- {'；'.join(parts)}")
     return "\n".join(lines)
 
 
@@ -832,6 +850,114 @@ async def update_chapter_outline(
     return volume.scalar_one()
 
 
+@router.put("/volumes/{volume_id}/outline", response_model=VolumeOut)
+async def update_volume_outline(
+    volume_id: str,
+    body: VolumeOutlineUpdate,
+    session: AsyncSession = Depends(get_session),
+) -> Volume:
+    """人工编辑卷标题/卷纲，返回该卷的最新结构。"""
+    volume = await session.get(Volume, volume_id)
+    if volume is None:
+        raise HTTPException(status_code=404, detail="卷不存在")
+    data = body.model_dump(exclude_none=True)
+    if "title" in data:
+        volume.title = data["title"]
+    if "outline" in data:
+        volume.outline = data["outline"]
+    await session.commit()
+    # 卷大纲变动同步到检索片段，让 RAG 召回最新背景。
+    chunk_res = await session.execute(
+        select(MemoryChunk).where(
+            MemoryChunk.source_type == "volume_outline",
+            MemoryChunk.source_id == volume.id,
+        )
+    )
+    chunk = chunk_res.scalar_one_or_none()
+    if chunk is not None:
+        chunk.text = f"{volume.title}：{volume.outline}"
+        chunk.keywords = [volume.title]
+        await session.commit()
+    refreshed = await session.execute(
+        select(Volume)
+        .where(Volume.id == volume_id)
+        .options(
+            selectinload(Volume.chapters).selectinload(Chapter.reviews),
+            selectinload(Volume.chapters).selectinload(Chapter.summary_row),
+        )
+    )
+    return refreshed.scalar_one()
+
+
+async def _purge_chapter_memory(session: AsyncSession, chapter_id: str) -> None:
+    """删除章节相关的检索片段与实体状态（MemoryChunk 的 source_id 非外键，需手动清理）。"""
+    chunk_res = await session.execute(
+        select(MemoryChunk).where(
+            MemoryChunk.source_type == "chapter_summary",
+            MemoryChunk.source_id == chapter_id,
+        )
+    )
+    for chunk in chunk_res.scalars().all():
+        await session.delete(chunk)
+    state_res = await session.execute(
+        select(EntityState).where(EntityState.chapter_id == chapter_id)
+    )
+    for state in state_res.scalars().all():
+        await session.delete(state)
+
+
+async def _reindex_volume_chapters(session: AsyncSession, volume_id: str) -> None:
+    """删除章节后，重排同卷剩余章节的 order_index 保持连续。"""
+    res = await session.execute(
+        select(Chapter).where(Chapter.volume_id == volume_id).order_by(Chapter.order_index)
+    )
+    for idx, chapter in enumerate(res.scalars().all()):
+        chapter.order_index = idx
+
+
+@router.delete("/chapters/{chapter_id}", status_code=204)
+async def delete_chapter(
+    chapter_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """删除单个章节及其摘要/审校/实体状态/检索片段，并重排同卷章节序号。"""
+    chapter = await session.get(Chapter, chapter_id)
+    if chapter is None:
+        raise HTTPException(status_code=404, detail="章节不存在")
+    volume_id = chapter.volume_id
+    await _purge_chapter_memory(session, chapter_id)
+    await session.delete(chapter)
+    await session.flush()
+    await _reindex_volume_chapters(session, volume_id)
+    await session.commit()
+
+
+@router.delete("/volumes/{volume_id}", status_code=204)
+async def delete_volume(
+    volume_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """删除整卷及其全部章节（含摘要/审校/实体状态/检索片段），并重排同项目卷序号。"""
+    volume = await session.get(Volume, volume_id)
+    if volume is None:
+        raise HTTPException(status_code=404, detail="卷不存在")
+    project_id = volume.project_id
+    chapter_res = await session.execute(
+        select(Chapter).where(Chapter.volume_id == volume_id)
+    )
+    for chapter in chapter_res.scalars().all():
+        await _purge_chapter_memory(session, chapter.id)
+    await session.delete(volume)
+    await session.flush()
+    # 重排同项目剩余卷的 order_index 保持连续。
+    res = await session.execute(
+        select(Volume).where(Volume.project_id == project_id).order_by(Volume.order_index)
+    )
+    for idx, vol in enumerate(res.scalars().all()):
+        vol.order_index = idx
+    await session.commit()
+
+
 @router.post("/{project_id}/outline/generate", response_model=list[VolumeOut])
 async def generate_project_outline(
     project_id: str,
@@ -849,6 +975,7 @@ async def generate_project_outline(
         volume_count=body.volume_count,
         chapters_per_volume=body.chapters_per_volume,
         existing_outline=_outline_context(existing_volumes),
+        characters=_characters_context(list(project.characters)),
         model=resolve_project_model(project, body.model),
     )
     created: list[Volume] = []
@@ -905,6 +1032,7 @@ async def fill_project_outline(
     style = style_text_from_guide(project.style_guide, "")
     premise = _premise_with_truth_files(project.premise, _format_truth_files(list(project.truth_files)))
     existing_outline = _outline_context(novel_volumes)
+    characters_text = _characters_context(list(project.characters))
     changed = False
     for volume in novel_volumes:
         chapters = sorted(volume.chapters, key=lambda ch: ch.order_index)
@@ -920,6 +1048,7 @@ async def fill_project_outline(
             volume_outline=volume.outline,
             existing_chapters=_chapter_context(chapters),
             additional_count=missing_count,
+            characters=characters_text,
             model=resolve_project_model(project, body.model),
         )
         chapter_offset = max((chapter.order_index for chapter in chapters), default=-1) + 1

@@ -288,7 +288,19 @@ def format_style_stats_prompt(stats: dict | None) -> str:
     return "\n".join(lines)
 
 
-def format_style_samples_prompt(samples: list[dict] | None) -> str:
+def redact_names(text: str, names: list[str] | None, placeholder: str = "某角色") -> str:
+    """把样例文本中的原书专名（角色名）替换为占位符，避免文风样例泄露旧姓名。"""
+    out = text or ""
+    if not out or not names:
+        return out
+    # 长名优先替换，避免短名是长名子串时造成残留。
+    for name in sorted({(n or "").strip() for n in names}, key=len, reverse=True):
+        if len(name) >= 2:
+            out = out.replace(name, placeholder)
+    return out
+
+
+def format_style_samples_prompt(samples: list[dict] | None, names: list[str] | None = None) -> str:
     usable = [item for item in (samples or []) if item.get("text")]
     if not usable:
         return ""
@@ -298,18 +310,24 @@ def format_style_samples_prompt(samples: list[dict] | None) -> str:
     ]
     for index, item in enumerate(usable[:6], 1):
         label = item.get("label") or _SAMPLE_KIND_LABELS.get(item.get("kind", ""), "样例")
-        lines.append(f"{index}. [{label}] {item.get('text')}")
+        text = redact_names(item.get("text", ""), names)
+        lines.append(f"{index}. [{label}] {text}")
     return "\n".join(lines)
 
 
-def style_text_from_guide(style_guide: dict | None, fallback: str = "") -> str:
+def style_text_from_guide(style_guide: dict | None, fallback: str = "", include_samples: bool = False) -> str:
     guide = style_guide if isinstance(style_guide, dict) else {}
     style = guide.get("style", "") if isinstance(guide.get("style", ""), str) else ""
     stats_prompt = guide.get("style_stats_prompt", "") if isinstance(guide.get("style_stats_prompt", ""), str) else ""
     if not stats_prompt:
         stats_prompt = format_style_stats_prompt(guide.get("style_stats"))
-    samples_prompt = guide.get("style_samples_prompt", "") if isinstance(guide.get("style_samples_prompt", ""), str) else ""
-    if not samples_prompt:
-        samples_prompt = format_style_samples_prompt(guide.get("style_samples"))
-    parts = [part for part in [style.strip(), stats_prompt.strip(), samples_prompt.strip()] if part]
+    parts = [style.strip(), stats_prompt.strip()]
+    # 默认不把原书样例片段注入生成 prompt（只用抽象文风/统计），避免原文专名泄露。
+    if include_samples:
+        names = guide.get("style_sample_names") if isinstance(guide.get("style_sample_names"), list) else None
+        samples_prompt = guide.get("style_samples_prompt", "") if isinstance(guide.get("style_samples_prompt", ""), str) else ""
+        if not samples_prompt:
+            samples_prompt = format_style_samples_prompt(guide.get("style_samples"), names)
+        parts.append(samples_prompt.strip())
+    parts = [part for part in parts if part]
     return "\n\n".join(parts) or fallback

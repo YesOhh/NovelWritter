@@ -8,7 +8,8 @@ OUTLINE_SYSTEM_PROMPT = """你是一位资深小说大纲师。请根据故事�
 - 遵循三幕结构（建置/对抗/解决），全书有清晰的起承转合。
 - 合理铺设并回收伏笔，卷与卷之间有递进与悬念钩子。
 - 每卷大纲概述本卷核心冲突与转折；每章大纲是 1~2 句可直接指导写作的情节梗概。
-- 严格按要求的卷数与每卷章数输出。"""
+- 严格按要求的卷数与每卷章数输出。
+- 必须以提供的【核心角色】角色卡为准：角色姓名、身份、关系一律使用角色卡中的设定。若故事设定或已有大纲中出现与角色卡不一致的旧姓名，一律以角色卡为准，不得沿用旧名。"""
 
 _OUTLINE_TOOL_SCHEMA = {
     "type": "object",
@@ -65,6 +66,7 @@ async def generate_outline(
     volume_count: int = 3,
     chapters_per_volume: int = 5,
     existing_outline: str = "",
+    characters: str = "",
     model: str | None = None,
 ) -> OutlineResult:
     existing_section = (
@@ -72,11 +74,17 @@ async def generate_outline(
         if existing_outline.strip()
         else ""
     )
+    characters_section = (
+        f"\n【核心角色（以此为准，姓名/关系一律使用此处设定）】\n{characters}"
+        if characters.strip()
+        else ""
+    )
     prompt = f"""【题材】{genre or "（未指定）"}
 【故事设定】
 {premise or "（未提供，请合理发挥）"}
 
 【文风】{style or "（未指定）"}
+{characters_section}
 {existing_section}
 
 请规划接下来的 {volume_count} 卷，每卷约 {chapters_per_volume} 章。调用 save_outline 工具只返回本次新增的大纲。"""
@@ -100,14 +108,20 @@ async def generate_volume_chapters(
     volume_outline: str,
     existing_chapters: str,
     additional_count: int,
+    characters: str = "",
     model: str | None = None,
 ) -> OutlineChaptersResult:
+    characters_section = (
+        f"\n【核心角色（以此为准，姓名/关系一律使用此处设定）】\n{characters}\n"
+        if characters.strip()
+        else ""
+    )
     prompt = f"""【题材】{genre or "（未指定）"}
 【故事设定】
 {premise or "（未提供，请合理发挥）"}
 
 【文风】{style or "（未指定）"}
-
+{characters_section}
 【整书已有大纲】
 {existing_outline or "（暂无）"}
 

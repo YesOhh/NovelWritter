@@ -1,12 +1,19 @@
 """参考文本导入/拆书分析 API。"""
 import re
+from datetime import datetime, timezone
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.reference_agent import analyze_reference_text
-from app.agents.style_stats import analyze_style_stats, extract_style_samples, format_style_samples_prompt
+from app.agents.style_stats import (
+    analyze_style_stats,
+    extract_style_samples,
+    format_style_samples_prompt,
+    redact_names,
+)
 from app.db import get_session
 from app.llm.model_resolver import resolve_project_model
 from app.memory.chapter_memory import refresh_chapter_memory
@@ -19,6 +26,8 @@ from app.schemas import (
     ReferenceChapterImportRequest,
     ReferenceChapterImportResult,
     ReferenceChapterTimelineItem,
+    ReferenceSourceItem,
+    ReferenceSourceRenameRequest,
 )
 
 router = APIRouter(prefix="/api", tags=["reference"])
@@ -59,6 +68,7 @@ def _merge_style_guide(
     result: ReferenceAnalyzeResult | None = None,
     style_stats: dict | None = None,
     style_samples: list[dict] | None = None,
+    redact: list[str] | None = None,
 ) -> None:
     existing_style = project.style_guide if isinstance(project.style_guide, dict) else {}
     next_style = {**existing_style}
@@ -69,9 +79,43 @@ def _merge_style_guide(
         next_style["style_stats"] = style_stats
         next_style["style_stats_prompt"] = style_stats.get("prompt", "")
     if style_samples:
-        next_style["style_samples"] = style_samples
-        next_style["style_samples_prompt"] = format_style_samples_prompt(style_samples)
+        names = [name for name in (redact or []) if (name or "").strip()]
+        # 存储前先把样例里的原书专名匿名化，避免后续生成/展示泄露旧姓名。
+        cleaned_samples = [
+            {**sample, "text": redact_names(sample.get("text", ""), names)}
+            for sample in style_samples
+        ]
+        next_style["style_samples"] = cleaned_samples
+        next_style["style_samples_prompt"] = format_style_samples_prompt(cleaned_samples, names)
+        if names:
+            next_style["style_sample_names"] = sorted(set(names))
     project.style_guide = next_style
+
+
+# 最多保留的拆书原文条数与单条字数上限。
+_MAX_REFERENCE_SOURCES = 10
+_MAX_REFERENCE_SOURCE_CHARS = 60000
+
+
+def _store_reference_source(project: Project, text: str) -> None:
+    """把本次拆书使用的原文保存到 style_guide，便于之后回看。"""
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return
+    existing_style = project.style_guide if isinstance(project.style_guide, dict) else {}
+    next_style = {**existing_style}
+    sources = list(next_style.get("reference_sources") or [])
+    entry = {
+        "id": str(uuid4()),
+        "label": "",
+        "text": cleaned[:_MAX_REFERENCE_SOURCE_CHARS],
+        "char_count": len(cleaned),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    sources.insert(0, entry)
+    next_style["reference_sources"] = sources[:_MAX_REFERENCE_SOURCES]
+    project.style_guide = next_style
+
 
 
 def _setting_text(setting: WorldSetting) -> str:
@@ -293,7 +337,7 @@ async def analyze_project_reference(
         )
 
     result.conflicts = conflicts
-    if not body.apply:
+    if not (body.apply_style or body.apply_resources):
         return result
 
     created_counts = {
@@ -305,10 +349,24 @@ async def analyze_project_reference(
         "conflicts": len([item for item in conflicts if item.status == "conflict"]),
     }
 
-    _merge_style_guide(project, result=result, style_stats=style_stats, style_samples=style_samples)
-    created_counts["style"] = 1
+    if body.apply_style:
+        _merge_style_guide(
+            project,
+            result=result,
+            style_stats=style_stats,
+            style_samples=style_samples,
+            redact=[item.name for item in result.characters if item.name.strip()],
+        )
+        created_counts["style"] = 1
+    # 无论是学文风还是导入设定，都保留本次拆书原文以便回看。
+    _store_reference_source(project, body.text)
 
-    for item in result.settings:
+    # 设定/角色/伏笔属于参考书自身内容，仅在用户明确选择“导入为本书正典”时才写入。
+    settings_to_apply = result.settings if body.apply_resources else []
+    characters_to_apply = result.characters if body.apply_resources else []
+    foreshadows_to_apply = result.foreshadows if body.apply_resources else []
+
+    for item in settings_to_apply:
         key = item.key.strip()
         if not key:
             continue
@@ -334,7 +392,7 @@ async def analyze_project_reference(
         existing_settings[marker] = setting
         created_counts["settings"] += 1
 
-    for item in result.characters:
+    for item in characters_to_apply:
         name = item.name.strip()
         if not name or name.lower() in existing_characters:
             continue
@@ -358,7 +416,7 @@ async def analyze_project_reference(
         existing_characters[name.lower()] = character
         created_counts["characters"] += 1
 
-    for item in result.foreshadows:
+    for item in foreshadows_to_apply:
         title = item.title.strip()
         if not title or title.lower() in existing_threads:
             continue
@@ -385,9 +443,98 @@ async def analyze_project_reference(
         created_counts["foreshadows"] += 1
 
     await session.commit()
-    result.applied = True
+    result.applied = body.apply_resources
     result.created_counts = created_counts
     return result
+
+
+def _reference_sources_list(project: Project) -> list[dict]:
+    style = project.style_guide if isinstance(project.style_guide, dict) else {}
+    sources = style.get("reference_sources")
+    return list(sources) if isinstance(sources, list) else []
+
+
+def _to_source_item(entry: dict) -> ReferenceSourceItem:
+    return ReferenceSourceItem(
+        id=str(entry.get("id", "")),
+        label=str(entry.get("label", "")),
+        text=str(entry.get("text", "")),
+        char_count=int(entry.get("char_count", 0) or 0),
+        created_at=str(entry.get("created_at", "")),
+    )
+
+
+@router.get(
+    "/projects/{project_id}/reference/sources",
+    response_model=list[ReferenceSourceItem],
+)
+async def list_reference_sources(
+    project_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> list[ReferenceSourceItem]:
+    project = await session.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    return [_to_source_item(item) for item in _reference_sources_list(project)]
+
+
+@router.patch(
+    "/projects/{project_id}/reference/sources/{source_id}",
+    response_model=ReferenceSourceItem,
+)
+async def rename_reference_source(
+    project_id: str,
+    source_id: str,
+    body: ReferenceSourceRenameRequest,
+    session: AsyncSession = Depends(get_session),
+) -> ReferenceSourceItem:
+    project = await session.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    style = project.style_guide if isinstance(project.style_guide, dict) else {}
+    next_style = {**style}
+    sources = list(next_style.get("reference_sources") or [])
+    target: dict | None = None
+    updated: list[dict] = []
+    for item in sources:
+        if isinstance(item, dict) and str(item.get("id", "")) == source_id:
+            target = {**item, "label": body.label.strip()}
+            updated.append(target)
+        else:
+            updated.append(item)
+    if target is None:
+        raise HTTPException(status_code=404, detail="拆书原文记录不存在")
+    next_style["reference_sources"] = updated
+    project.style_guide = next_style
+    await session.commit()
+    return _to_source_item(target)
+
+
+@router.delete(
+    "/projects/{project_id}/reference/sources/{source_id}",
+    status_code=204,
+)
+async def delete_reference_source(
+    project_id: str,
+    source_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    project = await session.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    style = project.style_guide if isinstance(project.style_guide, dict) else {}
+    next_style = {**style}
+    sources = list(next_style.get("reference_sources") or [])
+    remaining = [
+        item
+        for item in sources
+        if not (isinstance(item, dict) and str(item.get("id", "")) == source_id)
+    ]
+    if len(remaining) == len(sources):
+        raise HTTPException(status_code=404, detail="拆书原文记录不存在")
+    next_style["reference_sources"] = remaining
+    project.style_guide = next_style
+    await session.commit()
 
 
 @router.post("/projects/{project_id}/reference/chapters/import", response_model=ReferenceChapterImportResult)

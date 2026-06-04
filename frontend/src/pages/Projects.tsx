@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
+import type { ClipboardEvent } from "react";
 import {
   api,
   type Project,
@@ -30,6 +31,37 @@ import {
 import { streamSSE } from "../api/sse";
 
 const OVERVIEW_ID = "__overview";
+
+type Toast = { id: number; type: "success" | "error" | "info"; message: string };
+
+// busy 键 → 进度条提示文案（长任务有 LLM 调用，明确告知正在做什么）。
+const BUSY_LABELS: Record<string, string> = {
+  characters: "生成角色中…",
+  outline: "生成大纲中…",
+  "outline-fill": "补齐旧卷中…",
+  "continuation-anchor": "更新续写起点中…",
+  setting: "保存设定中…",
+  foreshadow: "保存伏笔/支线中…",
+  "character-edit": "保存角色中…",
+  "outline-edit": "保存章节大纲中…",
+  "volume-outline-edit": "保存卷大纲中…",
+  "chapter-delete": "删除章节中…",
+  "volume-delete": "删除整卷中…",
+  ocr: "识别图片文字中…",
+  "extract-foreshadow": "抽取本章伏笔中…",
+  "truth-file": "保存真相档案中…",
+  "truth-check": "校验真相一致性中…",
+  "truth-action": "应用真相维护建议中…",
+  "tracking-apply": "应用追踪建议中…",
+  "stall-scan": "扫描伏笔停滞中…",
+  "stall-apply": "应用停滞建议中…",
+  "health-check": "长篇体检中…",
+  reference: "分析参考资料中…",
+  "reference-chapters": "导入参考章节中…",
+  "reference-file": "读取文件中…",
+  "reference-source": "更新拆书原文记录中…",
+  "reader-review": "批量审校中…",
+};
 
 type ProjectsProps = {
   model?: string;
@@ -66,6 +98,23 @@ function styleSamplesOf(project: ProjectDetail | null): StyleSample[] {
 function styleTextOf(project: ProjectDetail | null): string {
   const value = project?.style_guide?.style;
   return typeof value === "string" ? value.trim() : "";
+}
+
+type ReferenceSource = { id?: string; label?: string; text: string; char_count: number; created_at: string };
+
+function isReferenceSourceArray(value: unknown): value is ReferenceSource[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (item) =>
+        item && typeof item === "object" && typeof (item as ReferenceSource).text === "string"
+    )
+  );
+}
+
+function referenceSourcesOf(project: ProjectDetail | null): ReferenceSource[] {
+  const value = project?.style_guide?.reference_sources;
+  return isReferenceSourceArray(value) ? value.filter((item) => item.text.trim()) : [];
 }
 
 function isTruthMaintenanceLogArray(value: unknown): value is TruthMaintenanceLogEntry[] {
@@ -229,6 +278,20 @@ export default function Projects({ model }: ProjectsProps) {
   );
   const [busy, setBusy] = useState<string>("");
   const [error, setError] = useState("");
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  // 章节生成可中止：保存当前 SSE 的 AbortController。
+  const generateAbortRef = useRef<AbortController | null>(null);
+
+  function dismissToast(id: number) {
+    setToasts((list) => list.filter((t) => t.id !== id));
+  }
+
+  function notify(message: string, type: Toast["type"] = "success") {
+    if (!message) return;
+    const id = Date.now() + Math.random();
+    setToasts((list) => [...list, { id, type, message }]);
+    window.setTimeout(() => dismissToast(id), type === "error" ? 6000 : 3200);
+  }
 
   // 章节写作流式状态：当前正在生成的章节 id 与其实时正文。
   const [writingChapter, setWritingChapter] = useState<string>("");
@@ -294,17 +357,23 @@ export default function Projects({ model }: ProjectsProps) {
   const [editingOutlineId, setEditingOutlineId] = useState<string>("");
   const [outlineDraftTitle, setOutlineDraftTitle] = useState("");
   const [outlineDraftText, setOutlineDraftText] = useState("");
+  const [editingVolumeId, setEditingVolumeId] = useState<string>("");
+  const [volumeDraftTitle, setVolumeDraftTitle] = useState("");
+  const [volumeDraftText, setVolumeDraftText] = useState("");
   // 从章节正文抽取伏笔候选项。
   const [extractResult, setExtractResult] = useState<ForeshadowExtractResult | null>(null);
   const [extractChapterId, setExtractChapterId] = useState<string>("");
   const [selectedCandidateIdx, setSelectedCandidateIdx] = useState<number[]>([]);
   const [referenceText, setReferenceText] = useState("");
   const [referenceFileName, setReferenceFileName] = useState("");
-  const [referenceApply, setReferenceApply] = useState(true);
+  const [referenceApplyStyle, setReferenceApplyStyle] = useState(true);
+  const [referenceApplyResources, setReferenceApplyResources] = useState(false);
   const [referenceResult, setReferenceResult] = useState<ReferenceAnalyzeResult | null>(null);
   const [referenceVolumeTitle, setReferenceVolumeTitle] = useState("参考拆书");
   const [referenceMaxChapters, setReferenceMaxChapters] = useState(12);
   const [referenceChapterResult, setReferenceChapterResult] = useState<ReferenceChapterImportResult | null>(null);
+  const [ocrImageCount, setOcrImageCount] = useState(0);
+  const [expandedReferenceSource, setExpandedReferenceSource] = useState<number | null>(null);
   const [contextPreview, setContextPreview] = useState<ChapterContextPreview | null>(null);
   const [contextPreviewChapter, setContextPreviewChapter] = useState("");
   const [contextPreviewLoading, setContextPreviewLoading] = useState("");
@@ -327,6 +396,12 @@ export default function Projects({ model }: ProjectsProps) {
   useEffect(() => {
     refresh();
   }, []);
+
+  // 错误同时以 toast 弹出，避免用户没注意到顶部横幅。
+  useEffect(() => {
+    if (error) notify(error, "error");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [error]);
 
   useEffect(() => {
     setSelectedReaderChapterIds([]);
@@ -399,6 +474,7 @@ export default function Projects({ model }: ProjectsProps) {
       await api.deleteProject(id);
       if (selected?.id === id) setSelected(null);
       await refresh();
+      notify("项目已删除");
     } catch (e) {
       setError((e as Error).message);
     }
@@ -413,6 +489,7 @@ export default function Projects({ model }: ProjectsProps) {
       setShowCreate(false);
       await refresh();
       await open(p.id);
+      notify("项目已创建");
     } catch (e) {
       setError((e as Error).message);
     }
@@ -425,6 +502,7 @@ export default function Projects({ model }: ProjectsProps) {
     try {
       await api.generateCharacters(selected.id, 4, activeModel());
       await open(selected.id);
+      notify("角色已生成");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -439,6 +517,7 @@ export default function Projects({ model }: ProjectsProps) {
     try {
       await api.generateOutline(selected.id, outlineVolumeCount, outlineChaptersPerVolume, activeModel());
       await open(selected.id);
+      notify("大纲已生成");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -453,6 +532,7 @@ export default function Projects({ model }: ProjectsProps) {
     try {
       await api.fillOutline(selected.id, outlineChaptersPerVolume, activeModel());
       await open(selected.id);
+      notify("旧卷已补齐");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -526,10 +606,12 @@ export default function Projects({ model }: ProjectsProps) {
         key: settingKey.trim(),
         value: settingValue.trim(),
       };
+      const editing = Boolean(editingSettingId);
       if (editingSettingId) await api.updateSetting(editingSettingId, body);
       else await api.createSetting(selected.id, body);
       resetSettingForm();
       await open(selected.id);
+      notify(editing ? "设定已更新" : "设定已新增");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -546,6 +628,7 @@ export default function Projects({ model }: ProjectsProps) {
       await api.deleteSetting(settingId);
       if (editingSettingId === settingId) resetSettingForm();
       await open(selected.id);
+      notify("设定已删除");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -586,10 +669,12 @@ export default function Projects({ model }: ProjectsProps) {
         description: threadDescription.trim(),
         payoff: threadPayoff.trim(),
       };
+      const editing = Boolean(editingThreadId);
       if (editingThreadId) await api.updateForeshadow(editingThreadId, body);
       else await api.createForeshadow(selected.id, body);
       resetThreadForm();
       await open(selected.id);
+      notify(editing ? "伏笔/支线已更新" : "伏笔/支线已新增");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -606,6 +691,7 @@ export default function Projects({ model }: ProjectsProps) {
       await api.deleteForeshadow(threadId);
       if (editingThreadId === threadId) resetThreadForm();
       await open(selected.id);
+      notify("伏笔/支线已删除");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -653,10 +739,12 @@ export default function Projects({ model }: ProjectsProps) {
         },
         arc: charArc.trim(),
       };
+      const creating = editingCharId === "__new";
       if (editingCharId === "__new") await api.createCharacter(selected.id, body);
       else await api.updateCharacter(editingCharId, body);
       resetCharForm();
       await open(selected.id);
+      notify(creating ? "角色已新增" : "角色已更新");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -673,6 +761,7 @@ export default function Projects({ model }: ProjectsProps) {
       await api.deleteCharacter(characterId);
       if (editingCharId === characterId) resetCharForm();
       await open(selected.id);
+      notify("角色已删除");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -703,6 +792,72 @@ export default function Projects({ model }: ProjectsProps) {
       });
       cancelEditOutline();
       await open(selected.id);
+      notify("章节大纲已保存");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  function startEditVolume(volumeId: string, title: string, outline: string) {
+    setEditingVolumeId(volumeId);
+    setVolumeDraftTitle(title);
+    setVolumeDraftText(outline);
+  }
+
+  function cancelEditVolume() {
+    setEditingVolumeId("");
+    setVolumeDraftTitle("");
+    setVolumeDraftText("");
+  }
+
+  async function saveVolumeOutline(volumeId: string) {
+    if (!selected) return;
+    setBusy("volume-outline-edit");
+    setError("");
+    try {
+      await api.updateVolumeOutline(volumeId, {
+        title: volumeDraftTitle.trim(),
+        outline: volumeDraftText.trim(),
+      });
+      cancelEditVolume();
+      await open(selected.id);
+      notify("卷大纲已保存");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function deleteChapter(chapterId: string, chapterTitle: string) {
+    if (!selected) return;
+    if (!confirm(`确定删除章节「${chapterTitle}」？正文、摘要、审校记录将一并删除，且不可恢复。`)) return;
+    setBusy("chapter-delete");
+    setError("");
+    try {
+      await api.deleteChapter(chapterId);
+      if (activeChapter === chapterId) setActiveChapter(OVERVIEW_ID);
+      await open(selected.id);
+      notify("章节已删除");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function deleteVolume(volumeId: string, volumeTitle: string, chapterCount: number) {
+    if (!selected) return;
+    if (!confirm(`确定删除整卷「${volumeTitle}」？该卷下 ${chapterCount} 个章节及其正文将一并删除，且不可恢复。`)) return;
+    setBusy("volume-delete");
+    setError("");
+    try {
+      await api.deleteVolume(volumeId);
+      setActiveChapter(OVERVIEW_ID);
+      await open(selected.id);
+      notify("整卷已删除");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -720,6 +875,7 @@ export default function Projects({ model }: ProjectsProps) {
       const res = await api.extractChapterForeshadows(chapterId, activeModel());
       setExtractResult(res);
       setSelectedCandidateIdx(res.candidates.map((_, idx) => idx));
+      notify(res.candidates.length > 0 ? `抽取到 ${res.candidates.length} 条候选伏笔` : "未抽取到新伏笔", res.candidates.length > 0 ? "success" : "info");
     } catch (e) {
       setError((e as Error).message);
       setExtractChapterId("");
@@ -761,6 +917,7 @@ export default function Projects({ model }: ProjectsProps) {
       }
       dismissExtract();
       await open(selected.id);
+      notify(`已登记 ${picks.length} 条伏笔`);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -801,12 +958,14 @@ export default function Projects({ model }: ProjectsProps) {
         owner: truthOwner.trim(),
         content: truthContent.trim(),
       };
+      const editing = Boolean(editingTruthId);
       if (editingTruthId) await api.updateTruthFile(editingTruthId, body);
       else await api.createTruthFile(selected.id, body);
       setTruthCheckResult(null);
       setSelectedTruthActionKeys([]);
       resetTruthForm();
       await open(selected.id);
+      notify(editing ? "真相档案已更新" : "真相档案已新增");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -825,6 +984,7 @@ export default function Projects({ model }: ProjectsProps) {
       setSelectedTruthActionKeys([]);
       if (editingTruthId === truthFileId) resetTruthForm();
       await open(selected.id);
+      notify("真相档案已删除");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -883,6 +1043,7 @@ export default function Projects({ model }: ProjectsProps) {
       setTruthCheckResult(null);
       setSelectedTruthActionKeys([]);
       await open(selected.id);
+      notify(`已应用 ${applicable.length} 条真相维护建议`);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -922,6 +1083,7 @@ export default function Projects({ model }: ProjectsProps) {
       const result = await api.suggestTracking(chapterId, activeModel());
       setSuggestionsChapter(chapterId);
       setTrackingSuggestions(result.suggestions);
+      notify("线索建议已生成");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -964,6 +1126,7 @@ export default function Projects({ model }: ProjectsProps) {
           .filter((s) => s.recommended_status && s.recommended_status !== "no_change")
           .map((s) => s.foreshadow_id)
       );
+      notify("伏笔停滞扫描完成");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -1003,6 +1166,7 @@ export default function Projects({ model }: ProjectsProps) {
       setStallResult(null);
       setSelectedStallIds([]);
       await open(selected.id);
+      notify(`已应用 ${applicable.length} 条停滞建议`);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -1031,6 +1195,106 @@ export default function Projects({ model }: ProjectsProps) {
           .filter(({ action }) => canApplyTruthAction(action))
           .map(({ action, index }) => truthActionKey(action, index))
       );
+      notify("长篇体检完成");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  function readFileAsImage(file: File): Promise<{ media_type: string; data: string }> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = String(reader.result || "");
+        const comma = result.indexOf(",");
+        resolve({
+          media_type: file.type || "image/png",
+          data: comma >= 0 ? result.slice(comma + 1) : result,
+        });
+      };
+      reader.onerror = () => reject(new Error("图片读取失败"));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function ocrImageFiles(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    const picked = Array.from(files).filter((f) => f.type.startsWith("image/"));
+    if (picked.length === 0) {
+      setError("请选择图片文件（JPEG/PNG/GIF/WebP）。");
+      return;
+    }
+    if (picked.length > 20) {
+      setError("一次最多识别 20 张图片，请分批上传。");
+      return;
+    }
+    setBusy("ocr");
+    setError("");
+    try {
+      const images = await Promise.all(picked.map(readFileAsImage));
+      const result = await api.ocrImages(images, "", activeModel());
+      const recognized = result.text.trim();
+      if (!recognized) {
+        notify("未识别到文字", "info");
+        return;
+      }
+      setReferenceText((prev) => (prev.trim() ? `${prev.trim()}\n\n${recognized}` : recognized));
+      setOcrImageCount((prev) => prev + result.image_count);
+      notify(`已识别 ${result.image_count} 张图片，文字已追加到参考文本`);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function ocrImageFileList(images: File[]) {
+    const dt = new DataTransfer();
+    images.forEach((f) => dt.items.add(f));
+    await ocrImageFiles(dt.files);
+  }
+
+  async function handleReferencePaste(e: ClipboardEvent<HTMLTextAreaElement>) {
+    const items = Array.from(e.clipboardData?.items ?? []);
+    const imageFiles = items
+      .filter((it) => it.kind === "file" && it.type.startsWith("image/"))
+      .map((it) => it.getAsFile())
+      .filter((f): f is File => f !== null);
+    if (imageFiles.length === 0) return; // 普通文字粘贴走默认行为
+    e.preventDefault();
+    if (busy !== "") return;
+    await ocrImageFileList(imageFiles);
+  }
+
+  async function renameReferenceSource(sourceId: string, currentLabel: string) {
+    if (!selected || !sourceId) return;
+    const next = window.prompt("重命名拆书原文记录", currentLabel);
+    if (next === null) return;
+    setBusy("reference-source");
+    setError("");
+    try {
+      await api.renameReferenceSource(selected.id, sourceId, next.trim());
+      await open(selected.id);
+      notify("已重命名");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function deleteReferenceSource(sourceId: string, name: string) {
+    if (!selected || !sourceId) return;
+    if (!confirm(`确定删除拆书原文记录「${name}」？此操作不可恢复。`)) return;
+    setBusy("reference-source");
+    setError("");
+    try {
+      await api.deleteReferenceSource(selected.id, sourceId);
+      setExpandedReferenceSource(null);
+      await open(selected.id);
+      notify("拆书原文记录已删除");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -1043,9 +1307,21 @@ export default function Projects({ model }: ProjectsProps) {
     setBusy("reference");
     setError("");
     try {
-      const result = await api.analyzeReference(selected.id, referenceText, referenceApply, activeModel());
+      const result = await api.analyzeReference(
+        selected.id,
+        referenceText,
+        { apply_style: referenceApplyStyle, apply_resources: referenceApplyResources },
+        activeModel()
+      );
       setReferenceResult(result);
-      if (referenceApply) await open(selected.id);
+      if (referenceApplyStyle || referenceApplyResources) await open(selected.id);
+      notify(
+        referenceApplyResources
+          ? "已分析：文风与设定/角色/线索均已写入"
+          : referenceApplyStyle
+          ? "已分析并学习文风（未导入设定/角色/线索）"
+          : "参考资料已分析（未写入）"
+      );
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -1069,6 +1345,7 @@ export default function Projects({ model }: ProjectsProps) {
       setReferenceChapterResult(result);
       await open(selected.id);
       setActiveChapter(OVERVIEW_ID);
+      notify(`已导入 ${result.imported_chapters ?? 0} 章参考资料`);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -1104,11 +1381,14 @@ export default function Projects({ model }: ProjectsProps) {
     setChapterText("");
     setPhase("writing");
     setError("");
+    const controller = new AbortController();
+    generateAbortRef.current = controller;
     try {
       await streamSSE(
         `/api/chapters/${chapterId}/generate`,
         { word_count: genWordCount, model: activeModel() },
         {
+          signal: controller.signal,
           onToken: (text) => setChapterText((prev) => prev + text),
           onError: (message) => setError(message),
           onEvent: (event, data) => {
@@ -1125,12 +1405,22 @@ export default function Projects({ model }: ProjectsProps) {
         }
       );
       await open(selected.id); // 刷新，章节状态变 drafted、带回正文与摘要
+      notify("本章生成完成");
     } catch (e) {
-      setError((e as Error).message);
+      if ((e as Error).name === "AbortError") {
+        notify("已中止本章生成", "info");
+      } else {
+        setError((e as Error).message);
+      }
     } finally {
+      generateAbortRef.current = null;
       setWritingChapter("");
       setPhase("");
     }
+  }
+
+  function abortGenerate() {
+    generateAbortRef.current?.abort();
   }
 
   async function reviewChapter(chapterId: string) {
@@ -1140,6 +1430,7 @@ export default function Projects({ model }: ProjectsProps) {
     try {
       await api.reviewChapter(chapterId, activeModel());
       await open(selected.id);
+      notify("本章审校完成");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -1158,6 +1449,7 @@ export default function Projects({ model }: ProjectsProps) {
       }
       setSelectedReaderChapterIds([]);
       await open(selected.id);
+      notify(`已批量审校 ${chapterIds.length} 章`);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -1173,6 +1465,7 @@ export default function Projects({ model }: ProjectsProps) {
     try {
       await api.reviseChapter(chapterId, mode, activeModel());
       await open(selected.id);
+      notify(mode === "anti-detect" ? "去AI味完成" : "自动修订完成");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -1199,6 +1492,7 @@ export default function Projects({ model }: ProjectsProps) {
       await api.updateChapterContent(chapterId, draftText, true, activeModel());
       cancelEditChapter();
       await open(selected.id);
+      notify("正文已保存");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -1220,6 +1514,7 @@ export default function Projects({ model }: ProjectsProps) {
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
+      notify(`已导出 ${format === "epub" ? "EPUB" : "Markdown"}`);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -1304,6 +1599,7 @@ export default function Projects({ model }: ProjectsProps) {
   const savedStyleStats = styleStatsOf(selected);
   const savedStyleSamples = styleSamplesOf(selected);
   const savedStyleText = styleTextOf(selected);
+  const savedReferenceSources = referenceSourcesOf(selected);
   const trackingItems = selected?.foreshadows ?? [];
   const truthFiles = selected?.truth_files ?? [];
   const truthMaintenanceLog = truthMaintenanceLogOf(selected);
@@ -1536,6 +1832,24 @@ export default function Projects({ model }: ProjectsProps) {
 
   return (
     <div className="workspace">
+      {/* 全局长任务进度条 */}
+      {busy && (
+        <div className="busy-bar" role="status" aria-live="polite">
+          <span className="busy-spinner" aria-hidden="true" />
+          {BUSY_LABELS[busy] ?? "处理中…"}
+        </div>
+      )}
+      {/* Toast 提示区 */}
+      {toasts.length > 0 && (
+        <div className="toast-stack" aria-live="polite">
+          {toasts.map((t) => (
+            <div key={t.id} className={`toast toast-${t.type}`} onClick={() => dismissToast(t.id)}>
+              <span className="toast-msg">{t.message}</span>
+              <button className="toast-close" aria-label="关闭" onClick={(e) => { e.stopPropagation(); dismissToast(t.id); }}>×</button>
+            </div>
+          ))}
+        </div>
+      )}
       {/* 左栏：项目列表 */}
       <aside className="rail">
         <div className="rail-head">
@@ -2133,6 +2447,71 @@ export default function Projects({ model }: ProjectsProps) {
               ) : (
                 <div className="hint">导入或分析参考文本后会生成文风指纹。</div>
               )}
+              {savedReferenceSources.length > 0 && (
+                <div className="reference-source-history">
+                  <div className="reference-source-history-head">
+                    <strong>拆书原文记录</strong>
+                    <span>{savedReferenceSources.length} 条 · 最多保留 10 条</span>
+                  </div>
+                  {savedReferenceSources.map((source, idx) => {
+                    const expanded = expandedReferenceSource === idx;
+                    const when = source.created_at
+                      ? new Date(source.created_at).toLocaleString()
+                      : "";
+                    const displayName = source.label?.trim() || when || `第 ${idx + 1} 条`;
+                    return (
+                      <div key={source.id || `${source.created_at}-${idx}`} className="reference-source-item">
+                        <button
+                          className="reference-source-toggle"
+                          onClick={() => setExpandedReferenceSource(expanded ? null : idx)}
+                        >
+                          <span className="reference-source-name">
+                            {displayName}
+                            {source.label?.trim() && when && (
+                              <small className="reference-source-time">{when}</small>
+                            )}
+                          </span>
+                          <span className="reference-source-meta">
+                            {source.char_count} 字 {expanded ? "▲" : "▼"}
+                          </span>
+                        </button>
+                        {expanded && (
+                          <div className="reference-source-body">
+                            <div className="reference-source-actions">
+                              <button
+                                className="mini secondary"
+                                onClick={() => {
+                                  setReferenceText((prev) =>
+                                    prev.trim() ? `${prev.trim()}\n\n${source.text}` : source.text
+                                  );
+                                  notify("已填回到参考文本框", "info");
+                                }}
+                              >
+                                填回文本框
+                              </button>
+                              <button
+                                className="mini secondary"
+                                disabled={busy !== "" || !source.id}
+                                onClick={() => renameReferenceSource(source.id || "", source.label || "")}
+                              >
+                                重命名
+                              </button>
+                              <button
+                                className="mini danger"
+                                disabled={busy !== "" || !source.id}
+                                onClick={() => deleteReferenceSource(source.id || "", displayName)}
+                              >
+                                删除
+                              </button>
+                            </div>
+                            <pre className="reference-source-text">{source.text}</pre>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
               <div className="reference-import">
                 <div className="reference-explainer">
                   <div>
@@ -2167,11 +2546,32 @@ export default function Projects({ model }: ProjectsProps) {
                       : referenceFileName || "也可以直接在下方粘贴片段"}
                   </span>
                 </div>
+                <div className="reference-source-row">
+                  <label className="reference-file-control">
+                    <span>{busy === "ocr" ? "识别中…" : "上传图片识别文字"}</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      disabled={busy !== ""}
+                      onChange={(e) => {
+                        ocrImageFiles(e.target.files);
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                  <span className="reference-file-name">
+                    {ocrImageCount > 0
+                      ? `已识别 ${ocrImageCount} 张图片，结果追加在下方`
+                      : "拆书原文是图片/截图时，可批量上传或在下方文本框 Ctrl+V 粘贴图片"}
+                  </span>
+                </div>
                 <textarea
                   rows={8}
                   value={referenceText}
                   onChange={(e) => setReferenceText(e.target.value)}
-                  placeholder="粘贴参考文本，或先导入 .txt / .md 文件"
+                  onPaste={handleReferencePaste}
+                  placeholder="粘贴参考文本，或先导入 .txt / .md 文件，也可直接 Ctrl+V 粘贴图片识别"
                 />
                 <div className="reference-import-options">
                   <label>
@@ -2197,21 +2597,40 @@ export default function Projects({ model }: ProjectsProps) {
                   </label>
                 </div>
                 <div className="reference-actions">
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={referenceApply}
-                      onChange={(e) => setReferenceApply(e.target.checked)}
-                    />
-                    分析后写入设定/角色/线索
-                  </label>
+                  <div className="reference-apply-options">
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={referenceApplyStyle}
+                        onChange={(e) => setReferenceApplyStyle(e.target.checked)}
+                      />
+                      学习文风（写入文风指纹/统计/样例，仅用于风格对齐）
+                    </label>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={referenceApplyResources}
+                        onChange={(e) => setReferenceApplyResources(e.target.checked)}
+                      />
+                      导入设定/角色/线索为本书正典
+                      <small className="reference-apply-warn">
+                        会把参考书自己的世界观、人物、情节搬进本项目并被正文直接沿用；只想借鉴写法时请保持关闭。
+                      </small>
+                    </label>
+                  </div>
                   <div className="reference-action-buttons">
                     <button
                       className="gen"
                       disabled={busy !== "" || referenceText.trim().length < 50}
                       onClick={analyzeReference}
                     >
-                      {busy === "reference" ? "分析中…" : referenceApply ? "分析并写入资料" : "仅分析"}
+                      {busy === "reference"
+                        ? "分析中…"
+                        : referenceApplyResources
+                        ? "分析并写入（含设定）"
+                        : referenceApplyStyle
+                        ? "分析并学习文风"
+                        : "仅分析"}
                     </button>
                     <button
                       className="secondary"
@@ -2861,13 +3280,108 @@ export default function Projects({ model }: ProjectsProps) {
                 <div className="book-outline">
                   {officialVolumes.map((v) => (
                     <section key={v.id} className="outline-volume">
-                      <h4>第 {v.order_index + 1} 卷 · {v.title}</h4>
-                      {v.outline && <p>{v.outline}</p>}
+                      <h4>
+                        <span>第 {v.order_index + 1} 卷 · {v.title}</span>
+                        <span className="outline-volume-tools">
+                          {editingVolumeId !== v.id && (
+                            <button
+                              className="mini secondary"
+                              disabled={busy !== ""}
+                              onClick={() => startEditVolume(v.id, v.title, v.outline)}
+                              title="编辑卷标题与卷纲"
+                            >
+                              编辑卷纲
+                            </button>
+                          )}
+                          <button
+                            className="mini danger"
+                            disabled={busy !== ""}
+                            onClick={() => deleteVolume(v.id, v.title, v.chapters.length)}
+                            title="删除整卷"
+                          >
+                            删除卷
+                          </button>
+                        </span>
+                      </h4>
+                      {editingVolumeId === v.id ? (
+                        <div className="outline-edit-form">
+                          <input
+                            value={volumeDraftTitle}
+                            placeholder="卷标题"
+                            onChange={(e) => setVolumeDraftTitle(e.target.value)}
+                          />
+                          <textarea
+                            value={volumeDraftText}
+                            placeholder="卷纲（本卷核心冲突与转折）"
+                            rows={4}
+                            onChange={(e) => setVolumeDraftText(e.target.value)}
+                          />
+                          <div className="card-actions">
+                            <button
+                              className="mini"
+                              disabled={busy === "volume-outline-edit"}
+                              onClick={() => saveVolumeOutline(v.id)}
+                            >
+                              {busy === "volume-outline-edit" ? "保存中…" : "保存卷纲"}
+                            </button>
+                            <button
+                              className="mini secondary"
+                              disabled={busy === "volume-outline-edit"}
+                              onClick={cancelEditVolume}
+                            >
+                              取消
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        v.outline && <p>{v.outline}</p>
+                      )}
                       <ol className="outline-chapters">
                         {v.chapters.map((ch) => (
                           <li key={ch.id}>
-                            <strong>{ch.title}</strong>
-                            <span>{ch.outline}</span>
+                            {editingOutlineId === ch.id ? (
+                              <div className="outline-edit-form">
+                                <input
+                                  value={outlineDraftTitle}
+                                  placeholder="章节标题"
+                                  onChange={(e) => setOutlineDraftTitle(e.target.value)}
+                                />
+                                <textarea
+                                  value={outlineDraftText}
+                                  placeholder="章节大纲"
+                                  rows={3}
+                                  onChange={(e) => setOutlineDraftText(e.target.value)}
+                                />
+                                <div className="card-actions">
+                                  <button
+                                    className="mini"
+                                    disabled={busy === "outline-edit"}
+                                    onClick={() => saveOutline(ch.id)}
+                                  >
+                                    {busy === "outline-edit" ? "保存中…" : "保存大纲"}
+                                  </button>
+                                  <button
+                                    className="mini secondary"
+                                    disabled={busy === "outline-edit"}
+                                    onClick={cancelEditOutline}
+                                  >
+                                    取消
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <>
+                                <strong>{ch.title}</strong>
+                                <span>{ch.outline}</span>
+                                <button
+                                  className="mini secondary outline-chapter-edit"
+                                  disabled={busy !== ""}
+                                  onClick={() => startEditOutline(ch.id, ch.title, ch.outline)}
+                                >
+                                  编辑
+                                </button>
+                              </>
+                            )}
                           </li>
                         ))}
                       </ol>
@@ -3152,6 +3666,15 @@ export default function Projects({ model }: ProjectsProps) {
                           : "生成本章"}
                       </button>
                     )}
+                    {!isReference && isWriting && (
+                      <button
+                        className="mini danger"
+                        onClick={abortGenerate}
+                        title="中止当前生成"
+                      >
+                        中止生成
+                      </button>
+                    )}
                     {!isReference && (
                       <label className="word-count-field" title="目标字数（200–6000）">
                         目标字数
@@ -3248,6 +3771,14 @@ export default function Projects({ model }: ProjectsProps) {
                         补充原文
                       </button>
                     )}
+                    <button
+                      className="gen danger"
+                      disabled={isWriting || isEditing || isSaving || isRevising || isReviewing || busy !== ""}
+                      onClick={() => deleteChapter(ch.id, ch.title)}
+                      title="删除本章"
+                    >
+                      删除本章
+                    </button>
                   </div>
 
                   {extractChapterId === ch.id && extractResult && (

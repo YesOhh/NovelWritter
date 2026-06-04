@@ -283,6 +283,19 @@ export interface ReviseResult {
   review?: ChapterReviewOut | null;
 }
 
+export interface OcrResult {
+  text: string;
+  image_count: number;
+}
+
+export interface ReferenceSourceItem {
+  id: string;
+  label: string;
+  text: string;
+  char_count: number;
+  created_at: string;
+}
+
 export interface ChapterContentResult {
   id: string;
   content: string;
@@ -471,6 +484,18 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(body),
     }),
+  updateVolumeOutline: (
+    volumeId: string,
+    body: { title?: string; outline?: string }
+  ) =>
+    req<VolumeOut>(`/api/projects/volumes/${volumeId}/outline`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  deleteChapter: (chapterId: string) =>
+    req<void>(`/api/projects/chapters/${chapterId}`, { method: "DELETE" }),
+  deleteVolume: (volumeId: string) =>
+    req<void>(`/api/projects/volumes/${volumeId}`, { method: "DELETE" }),
   generateOutline: (
     id: string,
     volume_count: number,
@@ -603,10 +628,38 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ model, max_chapters }),
     }),
-  analyzeReference: (projectId: string, text: string, apply = true, model?: string) =>
+  analyzeReference: (
+    projectId: string,
+    text: string,
+    opts: { apply_style?: boolean; apply_resources?: boolean } = {},
+    model?: string
+  ) =>
     req<ReferenceAnalyzeResult>(`/api/projects/${projectId}/reference/analyze`, {
       method: "POST",
-      body: JSON.stringify({ text, apply, model }),
+      body: JSON.stringify({
+        text,
+        apply_style: opts.apply_style ?? true,
+        apply_resources: opts.apply_resources ?? false,
+        model,
+      }),
+    }),
+  ocrImages: (
+    images: { media_type: string; data: string }[],
+    instruction = "",
+    model?: string
+  ) =>
+    req<OcrResult>(`/api/ocr`, {
+      method: "POST",
+      body: JSON.stringify({ images, instruction, model }),
+    }),
+  renameReferenceSource: (projectId: string, sourceId: string, label: string) =>
+    req<ReferenceSourceItem>(
+      `/api/projects/${projectId}/reference/sources/${sourceId}`,
+      { method: "PATCH", body: JSON.stringify({ label }) }
+    ),
+  deleteReferenceSource: (projectId: string, sourceId: string) =>
+    req<void>(`/api/projects/${projectId}/reference/sources/${sourceId}`, {
+      method: "DELETE",
     }),
   importReferenceChapters: (
     projectId: string,
